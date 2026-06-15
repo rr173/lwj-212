@@ -217,11 +217,12 @@ async def update_template(template_id: int, body: TemplateUpdate):
             (template_id, new_version, template_name, description, fields_json),
         )
         version_id = cursor.lastrowid
+        await db.commit()
 
-        v_row = await db.execute_fetchone(
+        v_rows = await db.execute_fetchall(
             "SELECT * FROM template_versions WHERE id = ?", (version_id,)
         )
-        await db.commit()
+        v_row = v_rows[0]
     finally:
         await db.close()
 

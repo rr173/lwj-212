@@ -74,7 +74,11 @@ async def parse_single(
     return parse_message(raw, fields, template_id, sample_id, actual_version)
 
 
-def _compare_results(result_a: ParseResult, result_b: ParseResult) -> CompareResult:
+def _compare_results(
+    result_a: ParseResult,
+    result_b: ParseResult,
+    field_order: list[str],
+) -> CompareResult:
     a_fields = {f.name: f for f in result_a.fields}
     b_fields = {f.name: f for f in result_b.fields}
 
@@ -83,8 +87,10 @@ def _compare_results(result_a: ParseResult, result_b: ParseResult) -> CompareRes
     only_b_fields: list[FieldDiffOnly] = []
 
     all_field_names = set(a_fields.keys()) | set(b_fields.keys())
+    ordered_names = [n for n in field_order if n in all_field_names]
+    ordered_names += [n for n in sorted(all_field_names) if n not in ordered_names]
 
-    for name in sorted(all_field_names):
+    for name in ordered_names:
         a_field = a_fields.get(name)
         b_field = b_fields.get(name)
 
@@ -147,6 +153,7 @@ def _compare_results(result_a: ParseResult, result_b: ParseResult) -> CompareRes
 @router.post("/compare", response_model=CompareResult)
 async def compare_samples(body: CompareRequest):
     fields, actual_version = await _get_template_fields(body.template_id, body.template_version)
+    field_order = [f.name for f in fields]
 
     raw_a = await _get_sample_data(body.sample_a_id)
     raw_b = await _get_sample_data(body.sample_b_id)
@@ -154,7 +161,7 @@ async def compare_samples(body: CompareRequest):
     result_a = parse_message(raw_a, fields, body.template_id, body.sample_a_id, actual_version)
     result_b = parse_message(raw_b, fields, body.template_id, body.sample_b_id, actual_version)
 
-    return _compare_results(result_a, result_b)
+    return _compare_results(result_a, result_b, field_order)
 
 
 @router.post("/batch", response_model=BatchValidateResult)
