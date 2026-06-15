@@ -56,11 +56,19 @@ async def seed_if_empty():
             return
 
         fields_json = json.dumps([f.model_dump() for f in DEMO_TEMPLATE_FIELDS])
+        description = "2-byte magic 0xFEED + 1-byte version + 1-byte msg_type + 2-byte payload_len (BE) + variable payload + 2-byte CRC16"
         cursor = await db.execute(
             "INSERT INTO templates (name, description, fields_json) VALUES (?, ?, ?)",
-            (DEMO_TEMPLATE_NAME, "2-byte magic 0xFEED + 1-byte version + 1-byte msg_type + 2-byte payload_len (BE) + variable payload + 2-byte CRC16", fields_json),
+            (DEMO_TEMPLATE_NAME, description, fields_json),
         )
         template_id = cursor.lastrowid
+        await db.execute(
+            """
+            INSERT INTO template_versions (template_id, version, name, description, fields_json)
+            VALUES (?, 1, ?, ?, ?)
+            """,
+            (template_id, DEMO_TEMPLATE_NAME, description, fields_json),
+        )
 
         for sample in DEMO_SAMPLES:
             cleaned = validate_hex(sample["hex_data"])

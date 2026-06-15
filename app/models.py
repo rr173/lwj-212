@@ -21,12 +21,35 @@ class TemplateCreate(BaseModel):
     fields: list[FieldDef]
 
 
+class TemplateUpdate(BaseModel):
+    description: Optional[str] = None
+    fields: list[FieldDef]
+
+
 class TemplateOut(BaseModel):
     id: int
     name: str
     description: str
     fields: list[FieldDef]
     created_at: str
+
+
+class TemplateVersionOut(BaseModel):
+    id: int
+    template_id: int
+    version: int
+    name: str
+    description: str
+    fields: list[FieldDef]
+    created_at: str
+
+
+class TemplateVersionSummary(BaseModel):
+    version: int
+    name: str
+    description: str
+    created_at: str
+    field_count: int
 
 
 class SampleCreate(BaseModel):
@@ -58,6 +81,7 @@ class ParsedField(BaseModel):
 class ParseResult(BaseModel):
     template_id: int
     sample_id: int
+    template_version: int = 1
     fields: list[ParsedField]
     coverage_percent: float
     covered_bytes: int
@@ -68,13 +92,53 @@ class ParseResult(BaseModel):
 class BatchValidateRequest(BaseModel):
     template_id: int
     sample_ids: list[int]
+    template_version: Optional[int] = None
 
 
 class BatchValidateResult(BaseModel):
     template_id: int
+    template_version: int
     total_samples: int
     success_count: int
     success_rate: float
     avg_coverage: float
     field_error_ranking: list[dict]
     details: list[ParseResult]
+
+
+class FieldDiffValue(BaseModel):
+    field_name: str
+    a_value: Optional[str]
+    b_value: Optional[str]
+    a_hex: str
+    b_hex: str
+    a_status: Literal["ok", "skipped", "parse_error"]
+    b_status: Literal["ok", "skipped", "parse_error"]
+    has_parse_error: bool
+
+
+class FieldDiffOnly(BaseModel):
+    field_name: str
+    value: Optional[str]
+    hex: str
+    status: Literal["ok", "skipped", "parse_error"]
+    error: Optional[str]
+
+
+class CompareRequest(BaseModel):
+    template_id: int
+    sample_a_id: int
+    sample_b_id: int
+    template_version: Optional[int] = None
+
+
+class CompareResult(BaseModel):
+    template_id: int
+    template_version: int
+    sample_a_id: int
+    sample_b_id: int
+    different_fields: list[FieldDiffValue]
+    only_a_fields: list[FieldDiffOnly]
+    only_b_fields: list[FieldDiffOnly]
+    parse_result_a: ParseResult
+    parse_result_b: ParseResult

@@ -36,7 +36,7 @@ def _type_size(data_type: str) -> int | None:
 
 
 def parse_message(
-    raw: bytes, fields: list[FieldDef], template_id: int, sample_id: int
+    raw: bytes, fields: list[FieldDef], template_id: int, sample_id: int, template_version: int = 1
 ) -> ParseResult:
     offset = 0
     total_len = len(raw)
@@ -230,6 +230,7 @@ def parse_message(
     return ParseResult(
         template_id=template_id,
         sample_id=sample_id,
+        template_version=template_version,
         fields=parsed_fields,
         coverage_percent=coverage_percent,
         covered_bytes=covered_bytes,
