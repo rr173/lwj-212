@@ -41,7 +41,7 @@ def parse_message(
     offset = 0
     total_len = len(raw)
     parsed_fields: list[ParsedField] = []
-    resolved_values: dict[str, int] = {}
+    resolved_values: dict[str, object] = {}
     resolved_types: dict[str, str] = {}
     covered: list[tuple[int, int]] = []
 
@@ -201,6 +201,10 @@ def parse_message(
                 "uint32_le",
             ):
                 resolved_values[field_def.name] = int(value)
+            elif field_def.data_type == "ascii":
+                resolved_values[field_def.name] = value
+            elif field_def.data_type == "bytes":
+                resolved_values[field_def.name] = value
             resolved_types[field_def.name] = field_def.data_type
 
         except Exception as e:

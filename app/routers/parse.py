@@ -5,6 +5,7 @@ from app.models import (
     BatchValidateRequest,
     BatchValidateResult,
     FieldDef,
+    ParsedField,
     ParseResult,
 )
 from app.database import get_db
@@ -66,6 +67,26 @@ async def batch_validate(body: BatchValidateRequest):
             await db2.close()
 
         if not s_rows:
+            missing_result = ParseResult(
+                template_id=body.template_id,
+                sample_id=sid,
+                fields=[
+                    ParsedField(
+                        name="__sample__",
+                        hex="",
+                        offset=0,
+                        length=0,
+                        status="parse_error",
+                        error=f"sample id {sid} not found",
+                    )
+                ],
+                coverage_percent=0.0,
+                covered_bytes=0,
+                total_bytes=0,
+                uncovered_ranges=[],
+            )
+            field_errors["__sample_missing__"] += 1
+            results.append(missing_result)
             continue
 
         raw = hex_to_bytes(s_rows[0]["hex_data"])
