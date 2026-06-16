@@ -232,14 +232,11 @@ def _generate_message(
     generated_parts: list[bytes] = []
     malformed_ref_override: dict[str, int] = {}
     generated_notes: dict[str, str] = {}
+    field_offsets: list[int] = []
 
     conditional_fields = [
         (i, f) for i, f in enumerate(fields)
         if f.condition_field and f.condition_value
-    ]
-    non_conditional_fields = [
-        (i, f) for i, f in enumerate(fields)
-        if not (f.condition_field and f.condition_value)
     ]
 
     ref_fields = [
@@ -248,9 +245,45 @@ def _generate_message(
     ]
     ref_targets = {f.length_ref_field for f in ref_fields if f.length_ref_field}
 
-    malformed_field_idx = None
+    malformed_type: str | None = None
+    malformed_target_idx: int | None = None
     if strategy == "malformed" and fields:
-        malformed_field_idx = random.randint(0, len(fields) - 1)
+        hard_malformed = []
+        soft_malformed = []
+
+        hard_malformed.append("empty")
+        hard_malformed.append("truncate_mid")
+
+        if ref_fields:
+            hard_malformed.append("ref_overflow")
+            soft_malformed.append("ref_underflow")
+
+        if conditional_fields:
+            hard_malformed.append("condition_contradiction")
+
+        soft_malformed.append("trailing_bytes")
+
+        if random.random() < 0.75:
+            malformed_type = random.choice(hard_malformed)
+        else:
+            malformed_type = random.choice(soft_malformed)
+
+        if malformed_type == "empty":
+            generated_notes["_global"] = "empty message"
+            return b"", generated_notes
+
+        elif malformed_type == "truncate_mid":
+            malformed_target_idx = random.randint(0, len(fields) - 1)
+        elif malformed_type in ("ref_overflow", "ref_underflow") and ref_fields:
+            ref_target_field = random.choice([f for f in fields if f.name in ref_targets])
+            for i, f in enumerate(fields):
+                if f.name == ref_target_field.name:
+                    malformed_target_idx = i
+                    break
+        elif malformed_type == "condition_contradiction" and conditional_fields:
+            malformed_target_idx = random.choice([i for i, _ in conditional_fields])
+        elif malformed_type == "trailing_bytes":
+            malformed_target_idx = None
 
     condition_satisfied_map: dict[int, bool] = {}
     for idx, f in conditional_fields:
@@ -259,14 +292,18 @@ def _generate_message(
         elif strategy == "boundary":
             condition_satisfied_map[idx] = random.choice([True, False])
         elif strategy == "malformed":
-            condition_satisfied_map[idx] = random.choice([True, False])
+            if malformed_type == "condition_contradiction" and idx == malformed_target_idx:
+                condition_satisfied_map[idx] = True
+            else:
+                condition_satisfied_map[idx] = random.choice([True, False])
 
+    current_offset = 0
     for idx, field_def in enumerate(fields):
         is_conditional = field_def.condition_field and field_def.condition_value
         will_include = True
 
         if is_conditional:
-            if strategy == "malformed" and idx == malformed_field_idx:
+            if strategy == "malformed" and malformed_type == "condition_contradiction" and idx == malformed_target_idx:
                 will_include = True
                 cond_field = field_def.condition_field
                 cond_type = resolved_types.get(cond_field, "")
@@ -276,13 +313,17 @@ def _generate_message(
                     current_val = resolved_values[cond_field]
                     if current_val == expected_val:
                         if cond_type in ("uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"):
-                            new_val = (int(expected_val) + 1) & _type_max_value(cond_type)
+                            max_val = _type_max_value(cond_type)
+                            if int(expected_val) < max_val:
+                                new_val = int(expected_val) + 1
+                            else:
+                                new_val = max(0, int(expected_val) - 1)
                             resolved_values[cond_field] = new_val
                             for i, part in enumerate(generated_parts):
                                 if i == [j for j, f in enumerate(fields) if f.name == cond_field][0]:
                                     generated_parts[i] = _encode_value(new_val, cond_type)
                                     break
-                        generated_notes[field_def.name] = "condition contradiction: field present but condition value modified to not match"
+                        generated_notes[field_def.name] = "condition contradiction: field present but condition value does not match"
                     else:
                         if cond_type in ("uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"):
                             resolved_values[cond_field] = int(expected_val)
@@ -290,7 +331,7 @@ def _generate_message(
                                 if i == [j for j, f in enumerate(fields) if f.name == cond_field][0]:
                                     generated_parts[i] = _encode_value(int(expected_val), cond_type)
                                     break
-                        generated_notes[field_def.name] = "condition contradiction: field present but condition value modified to match"
+                        generated_notes[field_def.name] = "condition contradiction: field present and condition value matches (field should be absent)"
             else:
                 will_include = condition_satisfied_map.get(idx, True)
                 if will_include:
@@ -326,38 +367,61 @@ def _generate_message(
         if not will_include:
             continue
 
-        is_malformed_this_field = (strategy == "malformed" and idx == malformed_field_idx)
+        field_is_ref_target = field_def.name in ref_targets
+        field_is_ref = field_def.length_rule == "ref" and field_def.length_ref_field
 
-        if field_def.name in ref_targets and strategy != "normal":
+        if field_is_ref_target:
             actual_payload_len = None
+            ref_field_def = None
             for f in fields[idx + 1:]:
                 if f.length_rule == "ref" and f.length_ref_field == field_def.name:
-                    if strategy == "boundary":
-                        actual_payload_len = random.choice([0, 1, 4, 32, 256])
-                    elif strategy == "malformed":
-                        actual_payload_len = random.choice([0, 100, 500, 1000])
+                    ref_field_def = f
                     break
 
-            if actual_payload_len is not None:
-                if strategy == "boundary":
-                    if random.random() < 0.5:
+            if strategy == "normal":
+                if ref_field_def is not None:
+                    actual_payload_len = random.randint(1, min(64, _type_max_value(field_def.data_type) or 64))
+                    declared_len = actual_payload_len
+                    malformed_ref_override[field_def.name] = actual_payload_len
+            elif strategy == "boundary":
+                if ref_field_def is not None:
+                    max_val = _type_max_value(field_def.data_type) or 255
+                    choices = [0, 1, max_val, max(1, max_val // 2)]
+                    actual_payload_len = random.choice(choices)
+                    if random.random() < 0.3:
                         declared_len = actual_payload_len
                     else:
-                        declared_len = actual_payload_len + random.randint(1, 10)
-                elif strategy == "malformed":
-                    declared_len = actual_payload_len + random.randint(50, 200)
+                        declared_len = min(max_val, actual_payload_len + random.randint(1, 5))
                     malformed_ref_override[field_def.name] = actual_payload_len
-                    generated_notes[field_def.name] = f"ref mismatch: declared={declared_len}, actual={actual_payload_len}"
-                else:
+            elif strategy == "malformed":
+                if malformed_type == "ref_overflow" and ref_field_def is not None:
+                    max_val = _type_max_value(field_def.data_type) or 255
+                    declared_len = max_val
+                    actual_payload_len = max(0, random.randint(0, max(0, max_val - 50)))
+                    malformed_ref_override[field_def.name] = actual_payload_len
+                    generated_notes[field_def.name] = f"ref overflow: declared={declared_len}, actual={actual_payload_len}"
+                elif malformed_type == "ref_underflow" and ref_field_def is not None:
+                    max_val = _type_max_value(field_def.data_type) or 255
+                    actual_payload_len = random.randint(20, min(100, max_val))
+                    declared_len = max(0, actual_payload_len - random.randint(5, 15))
+                    malformed_ref_override[field_def.name] = actual_payload_len
+                    generated_notes[field_def.name] = f"ref underflow: declared={declared_len}, actual={actual_payload_len} (trailing bytes expected)"
+                elif ref_field_def is not None:
+                    max_val = _type_max_value(field_def.data_type) or 255
+                    actual_payload_len = random.randint(0, min(100, max_val))
                     declared_len = actual_payload_len
+                    malformed_ref_override[field_def.name] = actual_payload_len
 
+            if ref_field_def is not None and actual_payload_len is not None:
                 if field_def.data_type in ("uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"):
                     max_val = _type_max_value(field_def.data_type)
-                    declared_len = min(declared_len, max_val)
+                    declared_len = min(max(0, declared_len), max_val)
                     encoded = _encode_value(declared_len, field_def.data_type)
+                    field_offsets.append(current_offset)
                     generated_parts.append(encoded)
                     resolved_values[field_def.name] = declared_len
                     resolved_types[field_def.name] = field_def.data_type
+                    current_offset += len(encoded)
                     continue
 
         field_len = _determine_field_length(
@@ -371,59 +435,33 @@ def _generate_message(
                 elif random.random() < 0.3:
                     field_len = min(field_len, 1024) if field_len > 0 else 256
 
-        if is_malformed_this_field:
-            if field_def.data_type in ("uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"):
-                max_val = _type_max_value(field_def.data_type)
-                if random.random() < 0.5:
-                    encoded = _encode_value(max_val + 1, field_def.data_type)
-                    resolved_values[field_def.name] = max_val + 1
-                    generated_notes[field_def.name] = f"value overflow: {max_val + 1} (max={max_val})"
-                else:
-                    encoded = _encode_value(0, field_def.data_type)
-                    resolved_values[field_def.name] = 0
-                    generated_notes[field_def.name] = "zero value"
-            elif field_def.length_rule == "ref" and field_def.length_ref_field:
-                field_len = max(0, field_len + random.randint(100, 500))
-                encoded, value = _generate_field_value(field_def, field_len, strategy)
-                generated_notes[field_def.name] = f"length overflow: declared +{field_len} bytes"
-                resolved_values[field_def.name] = value
-            else:
-                encoded, value = _generate_field_value(field_def, field_len, "malformed")
-                resolved_values[field_def.name] = value
-                generated_notes[field_def.name] = "malformed content"
-
-            resolved_types[field_def.name] = field_def.data_type
-            generated_parts.append(encoded)
-            continue
-
         encoded, value = _generate_field_value(field_def, field_len, strategy)
 
-        if field_def.length_rule == "fixed" and field_def.data_type in ("uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"):
-            for f in fields[idx + 1:]:
-                if f.length_rule == "ref" and f.length_ref_field == field_def.name:
-                    actual_len = len(encoded) if field_def.data_type == "bytes" else field_len
-                    if strategy == "normal":
-                        pass
-                    elif strategy == "boundary":
-                        if random.random() < 0.5:
-                            value = max(0, value - 1)
-                            encoded = _encode_value(value, field_def.data_type)
-                            generated_notes[field_def.name] = "boundary: ref length -1"
-                    break
+        if strategy == "malformed" and malformed_type == "truncate_mid" and idx == malformed_target_idx:
+            truncate_at = random.randint(0, max(0, len(encoded) - 1))
+            if truncate_at == 0:
+                encoded = b""
+                generated_notes["_global"] = f"truncated before field '{field_def.name}' (0 bytes available)"
+            else:
+                encoded = encoded[:truncate_at]
+                generated_notes["_global"] = f"truncated inside field '{field_def.name}' ({truncate_at}/{field_len} bytes)"
+            field_offsets.append(current_offset)
+            generated_parts.append(encoded)
+            final_bytes = b"".join(generated_parts)
+            return final_bytes, generated_notes
 
+        field_offsets.append(current_offset)
         generated_parts.append(encoded)
         resolved_values[field_def.name] = value
         resolved_types[field_def.name] = field_def.data_type
+        current_offset += len(encoded)
 
     final_bytes = b"".join(generated_parts)
 
-    if strategy == "malformed" and random.random() < 0.3:
-        if random.random() < 0.5:
-            final_bytes = final_bytes[: max(1, len(final_bytes) - random.randint(1, 10))]
-            generated_notes["_global"] = "truncated message"
-        else:
-            final_bytes = final_bytes + os.urandom(random.randint(1, 20))
-            generated_notes["_global"] = "extra trailing bytes"
+    if strategy == "malformed" and malformed_type == "trailing_bytes":
+        extra = random.randint(1, 50)
+        final_bytes = final_bytes + os.urandom(extra)
+        generated_notes["_global"] = f"extra trailing bytes (+{extra} bytes)"
 
     return final_bytes, generated_notes
 
@@ -592,22 +630,36 @@ async def generate_and_validate(
                         field_errors[f.name] += 1
 
                 if strategy == "normal":
+                    sample = next(
+                        s for s in generated_samples
+                        if s.sample_id == pr.sample_id
+                    )
+
                     error_fields = [f for f in pr.fields if f.status == "parse_error"]
-                    if error_fields:
-                        sample = next(
-                            s for s in generated_samples
-                            if s.sample_id == pr.sample_id
-                        )
-                        for ef in error_fields:
-                            template_defects.append(
-                                FuzzTemplateDefect(
-                                    sample_name=sample.name,
-                                    sample_id=sample.sample_id,
-                                    field_name=ef.name,
-                                    error=ef.error or "",
-                                    hex_data=hex_data,
-                                )
+                    for ef in error_fields:
+                        template_defects.append(
+                            FuzzTemplateDefect(
+                                sample_name=sample.name,
+                                sample_id=sample.sample_id,
+                                field_name=ef.name,
+                                error=ef.error or "",
+                                hex_data=hex_data,
                             )
+                        )
+
+                    if pr.coverage_percent < 100.0:
+                        uncovered_desc = ", ".join(
+                            f"[{r[0]}-{r[1]}]" for r in pr.uncovered_ranges
+                        ) if pr.uncovered_ranges else "unknown"
+                        template_defects.append(
+                            FuzzTemplateDefect(
+                                sample_name=sample.name,
+                                sample_id=sample.sample_id,
+                                field_name="_coverage",
+                                error=f"coverage only {pr.coverage_percent:.1f}% (uncovered ranges: {uncovered_desc})",
+                                hex_data=hex_data,
+                            )
+                        )
 
         strategy_stats = [
             FuzzStrategyStats(**stats)
