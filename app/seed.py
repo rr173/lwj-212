@@ -153,6 +153,59 @@ async def seed_if_empty():
                     (sample["name"], cleaned, byte_length, entropy, sample["note"]),
                 )
 
+        sm_rows = await db.execute_fetchall(
+            "SELECT id FROM state_machines WHERE template_id = ?", (template_id,)
+        )
+        if not sm_rows:
+            sm_cur = await db.execute(
+                """
+                INSERT INTO state_machines (template_id, name, description)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    template_id,
+                    "Demo: FEED Protocol State Machine",
+                    "Demonstrates a simple 3-state protocol lifecycle: idle -> active -> closed, triggered by msg_type field.",
+                ),
+            )
+            state_machine_id = sm_cur.lastrowid
+
+            idle_cur = await db.execute(
+                "INSERT INTO sm_states (state_machine_id, name, state_type) VALUES (?, ?, 'initial')",
+                (state_machine_id, "idle"),
+            )
+            idle_id = idle_cur.lastrowid
+
+            active_cur = await db.execute(
+                "INSERT INTO sm_states (state_machine_id, name, state_type) VALUES (?, ?, 'intermediate')",
+                (state_machine_id, "active"),
+            )
+            active_id = active_cur.lastrowid
+
+            closed_cur = await db.execute(
+                "INSERT INTO sm_states (state_machine_id, name, state_type) VALUES (?, ?, 'terminal')",
+                (state_machine_id, "closed"),
+            )
+            closed_id = closed_cur.lastrowid
+
+            await db.execute(
+                """
+                INSERT INTO sm_transitions 
+                (state_machine_id, from_state_id, to_state_id, trigger_field, trigger_value, direction_constraint)
+                VALUES (?, ?, ?, 'msg_type', '1', 'both')
+                """,
+                (state_machine_id, idle_id, active_id),
+            )
+
+            await db.execute(
+                """
+                INSERT INTO sm_transitions 
+                (state_machine_id, from_state_id, to_state_id, trigger_field, trigger_value, direction_constraint)
+                VALUES (?, ?, ?, 'msg_type', '2', 'both')
+                """,
+                (state_machine_id, active_id, closed_id),
+            )
+
         s_rows = await db.execute_fetchall(
             "SELECT id FROM sessions WHERE name = ?", (DEMO_SESSION_NAME,)
         )

@@ -389,3 +389,129 @@ class FixedHeaderResult(BaseModel):
     total_samples: int
     max_length: int
     regions: list[FixedHeaderRegion]
+
+
+# ============ State Machine Models ============
+
+class StateType(str):
+    pass
+
+
+class StateCreate(BaseModel):
+    name: str
+    state_type: Literal["initial", "intermediate", "terminal"]
+
+
+class StateOut(BaseModel):
+    id: int
+    state_machine_id: int
+    name: str
+    state_type: Literal["initial", "intermediate", "terminal"]
+
+
+class TransitionCreate(BaseModel):
+    from_state_name: str
+    to_state_name: str
+    trigger_field: str
+    trigger_value: str
+    direction_constraint: Literal["request", "response", "both"] = "both"
+
+
+class TransitionOut(BaseModel):
+    id: int
+    state_machine_id: int
+    from_state_id: int
+    to_state_id: int
+    from_state_name: str
+    to_state_name: str
+    trigger_field: str
+    trigger_value: str
+    direction_constraint: Literal["request", "response", "both"]
+
+
+class StateMachineCreate(BaseModel):
+    template_id: int
+    name: str
+    description: str = ""
+    states: list[StateCreate]
+    transitions: list[TransitionCreate]
+
+
+class StateMachineUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    states: Optional[list[StateCreate]] = None
+    transitions: Optional[list[TransitionCreate]] = None
+
+
+class StateMachineOut(BaseModel):
+    id: int
+    template_id: int
+    name: str
+    description: str
+    state_count: int
+    transition_count: int
+    created_at: str
+
+
+class StateMachineDetailOut(BaseModel):
+    id: int
+    template_id: int
+    name: str
+    description: str
+    states: list[StateOut]
+    transitions: list[TransitionOut]
+    created_at: str
+
+
+class ViolationFrame(BaseModel):
+    frame_seq: int
+    current_state: str
+    expected_transitions: list[dict]
+    actual_field_value: Optional[str]
+    actual_direction: str
+
+
+class StateTransitionHistoryEntry(BaseModel):
+    step: int
+    from_state: str
+    to_state: str
+    frame_seq: int
+    trigger_field: str
+    trigger_value: str
+
+
+class ValidationResult(BaseModel):
+    session_id: int
+    state_machine_id: int
+    final_state: Optional[str]
+    reached_terminal: bool
+    can_validate: bool
+    violation_count: int
+    violations: list[ViolationFrame]
+    transition_history: list[StateTransitionHistoryEntry]
+    total_frames: int
+
+
+class CandidateState(BaseModel):
+    name: str
+    state_type: Literal["initial", "intermediate", "terminal"]
+    trigger_field_value: str
+
+
+class CandidateTransition(BaseModel):
+    from_state_name: str
+    to_state_name: str
+    trigger_field: str
+    trigger_value: str
+    direction_constraint: Literal["request", "response", "both"]
+
+
+class InferenceResult(BaseModel):
+    session_id: int
+    template_id: int
+    trigger_field: str
+    states: list[CandidateState]
+    transitions: list[CandidateTransition]
+    total_frames: int
+    status: Literal["candidate"] = "candidate"

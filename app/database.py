@@ -94,6 +94,56 @@ CREATE_FINGERPRINTS_TEMPLATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_fingerprints_template ON fingerprints (template_id)
 """
 
+CREATE_STATE_MACHINES_TABLE = """
+CREATE TABLE IF NOT EXISTS state_machines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE,
+    UNIQUE(template_id)
+)
+"""
+
+CREATE_SM_STATES_TABLE = """
+CREATE TABLE IF NOT EXISTS sm_states (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_machine_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    state_type TEXT NOT NULL CHECK(state_type IN ('initial', 'intermediate', 'terminal')),
+    FOREIGN KEY (state_machine_id) REFERENCES state_machines (id) ON DELETE CASCADE,
+    UNIQUE(state_machine_id, name)
+)
+"""
+
+CREATE_SM_STATES_SM_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_sm_states_sm ON sm_states (state_machine_id)
+"""
+
+CREATE_SM_TRANSITIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS sm_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_machine_id INTEGER NOT NULL,
+    from_state_id INTEGER NOT NULL,
+    to_state_id INTEGER NOT NULL,
+    trigger_field TEXT NOT NULL,
+    trigger_value TEXT NOT NULL,
+    direction_constraint TEXT NOT NULL CHECK(direction_constraint IN ('request', 'response', 'both')),
+    FOREIGN KEY (state_machine_id) REFERENCES state_machines (id) ON DELETE CASCADE,
+    FOREIGN KEY (from_state_id) REFERENCES sm_states (id) ON DELETE CASCADE,
+    FOREIGN KEY (to_state_id) REFERENCES sm_states (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_SM_TRANSITIONS_SM_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_sm_transitions_sm ON sm_transitions (state_machine_id)
+"""
+
+CREATE_SM_TRANSITIONS_FROM_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_sm_transitions_from ON sm_transitions (state_machine_id, from_state_id)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -134,6 +184,12 @@ async def init_db():
         await db.execute(CREATE_SESSION_FRAMES_DIRECTION_INDEX)
         await db.execute(CREATE_FINGERPRINTS_TABLE)
         await db.execute(CREATE_FINGERPRINTS_TEMPLATE_INDEX)
+        await db.execute(CREATE_STATE_MACHINES_TABLE)
+        await db.execute(CREATE_SM_STATES_TABLE)
+        await db.execute(CREATE_SM_STATES_SM_INDEX)
+        await db.execute(CREATE_SM_TRANSITIONS_TABLE)
+        await db.execute(CREATE_SM_TRANSITIONS_SM_INDEX)
+        await db.execute(CREATE_SM_TRANSITIONS_FROM_INDEX)
         await db.commit()
     finally:
         await db.close()
