@@ -107,6 +107,18 @@ async def seed_if_empty():
         rows = await db.execute_fetchall("SELECT id FROM templates WHERE name = ?", (DEMO_TEMPLATE_NAME,))
         if rows:
             template_id = rows[0]["id"]
+            fp_rows = await db.execute_fetchall(
+                "SELECT id FROM fingerprints WHERE template_id = ? AND offset = 0 AND expected_hex = 'feed'",
+                (template_id,),
+            )
+            if not fp_rows:
+                await db.execute(
+                    """
+                    INSERT INTO fingerprints (template_id, offset, expected_hex, match_type, mask_hex)
+                    VALUES (?, 0, 'feed', 'exact', NULL)
+                    """,
+                    (template_id,),
+                )
         else:
             fields_json = json.dumps([f.model_dump() for f in DEMO_TEMPLATE_FIELDS])
             description = "2-byte magic 0xFEED + 1-byte version + 1-byte msg_type + 2-byte payload_len (BE) + variable payload + 2-byte CRC16"
@@ -121,6 +133,14 @@ async def seed_if_empty():
                 VALUES (?, 1, ?, ?, ?)
                 """,
                 (template_id, DEMO_TEMPLATE_NAME, description, fields_json),
+            )
+
+            await db.execute(
+                """
+                INSERT INTO fingerprints (template_id, offset, expected_hex, match_type, mask_hex)
+                VALUES (?, 0, 'feed', 'exact', NULL)
+                """,
+                (template_id,),
             )
 
             for sample in DEMO_SAMPLES:

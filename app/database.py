@@ -77,6 +77,23 @@ CREATE_SESSION_FRAMES_DIRECTION_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_session_frames_direction ON session_frames (session_id, direction)
 """
 
+CREATE_FINGERPRINTS_TABLE = """
+CREATE TABLE IF NOT EXISTS fingerprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    expected_hex TEXT NOT NULL,
+    match_type TEXT NOT NULL CHECK(match_type IN ('exact', 'mask')),
+    mask_hex TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_FINGERPRINTS_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_fingerprints_template ON fingerprints (template_id)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -115,6 +132,8 @@ async def init_db():
         await db.execute(CREATE_SESSION_FRAMES_TABLE)
         await db.execute(CREATE_SESSION_FRAMES_TS_INDEX)
         await db.execute(CREATE_SESSION_FRAMES_DIRECTION_INDEX)
+        await db.execute(CREATE_FINGERPRINTS_TABLE)
+        await db.execute(CREATE_FINGERPRINTS_TEMPLATE_INDEX)
         await db.commit()
     finally:
         await db.close()

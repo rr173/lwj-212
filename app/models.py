@@ -275,3 +275,48 @@ class FuzzReport(BaseModel):
     coverage_overview: dict
     template_defects: list[FuzzTemplateDefect]
     samples: list[FuzzGeneratedSample]
+
+
+class FingerprintCreate(BaseModel):
+    offset: int
+    expected_hex: str
+    match_type: Literal["exact", "mask"] = "exact"
+    mask_hex: Optional[str] = None
+
+
+class FingerprintOut(BaseModel):
+    id: int
+    template_id: int
+    offset: int
+    expected_hex: str
+    match_type: str
+    mask_hex: Optional[str] = None
+    created_at: str
+
+
+class RecognizeRequest(BaseModel):
+    hex_data: str
+
+
+class RecognizedTemplate(BaseModel):
+    template_id: int
+    template_name: str
+    total_rules: int
+    matched_rules: int
+    is_full_match: bool
+    confidence: Optional[int] = None
+
+
+class RecognizeResult(BaseModel):
+    matches: list[RecognizedTemplate]
+
+
+class SmartParseRequest(BaseModel):
+    hex_data: str
+
+
+class SmartParseResult(BaseModel):
+    status: Literal["success", "ambiguous", "failed"]
+    parse_result: Optional[ParseResult] = None
+    candidates: Optional[list[RecognizedTemplate]] = None
+    message: Optional[str] = None
