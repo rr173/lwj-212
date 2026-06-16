@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis
 
 
 @asynccontextmanager
@@ -25,6 +25,7 @@ app.include_router(parse.router)
 app.include_router(sessions.router)
 app.include_router(fuzz.router)
 app.include_router(fingerprints.router)
+app.include_router(analysis.router)
 
 
 @app.get("/")
@@ -43,5 +44,6 @@ async def root():
             "Protocol fuzz testing (auto-generate normal/boundary/malformed messages)",
             "Protocol fingerprint library & automatic identification",
             "Smart parsing (auto-recognize protocol and parse)",
+            "Byte heatmap & field mutation analysis for batch samples",
         ],
     }

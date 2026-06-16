@@ -320,3 +320,72 @@ class SmartParseResult(BaseModel):
     parse_result: Optional[ParseResult] = None
     candidates: Optional[list[RecognizedTemplate]] = None
     message: Optional[str] = None
+
+
+# ============ Analysis Models ============
+
+class ByteHeatmapRequest(BaseModel):
+    sample_ids: list[int] = Field(..., min_length=2, max_length=50)
+
+
+class ByteHeatmapEntry(BaseModel):
+    offset: int
+    unique_count: int
+    mode_value: str
+    mode_count: int
+    is_fixed: bool
+    total_samples: int
+    missing_count: int
+
+
+class ByteHeatmapResult(BaseModel):
+    sample_ids: list[int]
+    max_length: int
+    sample_lengths: dict[int, int]
+    total_samples: int
+    heatmap: list[ByteHeatmapEntry]
+
+
+class FieldMutationRequest(BaseModel):
+    sample_ids: list[int] = Field(..., min_length=2, max_length=50)
+    template_id: int
+    template_version: Optional[int] = None
+
+
+class FieldMutationEntry(BaseModel):
+    field_name: str
+    unique_count: int
+    mode_value: Optional[str]
+    mode_count: int
+    distribution: dict[str, int]
+    mutation_rate: float
+    total_samples: int
+
+
+class FieldMutationResult(BaseModel):
+    template_id: int
+    template_version: int
+    sample_ids: list[int]
+    skipped_count: int
+    skipped_ids: list[int]
+    total_analyzed: int
+    fields: list[FieldMutationEntry]
+
+
+class FixedHeaderRequest(BaseModel):
+    sample_ids: list[int] = Field(..., min_length=2, max_length=50)
+    min_length: int = Field(default=2, ge=2, description="Minimum consecutive fixed bytes to qualify as a fixed header region")
+
+
+class FixedHeaderRegion(BaseModel):
+    start_offset: int
+    end_offset: int
+    length: int
+    fixed_hex: str
+
+
+class FixedHeaderResult(BaseModel):
+    sample_ids: list[int]
+    total_samples: int
+    max_length: int
+    regions: list[FixedHeaderRegion]

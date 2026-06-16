@@ -1,3 +1,3 @@
-from app.routers import samples, templates, parse, sessions, fuzz
+from app.routers import samples, templates, parse, sessions, fuzz, analysis
 
-__all__ = ["samples", "templates", "parse", "sessions", "fuzz"]
+__all__ = ["samples", "templates", "parse", "sessions", "fuzz", "analysis"]
