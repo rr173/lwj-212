@@ -100,7 +100,7 @@ async def byte_heatmap(body: ByteHeatmapRequest):
         counter = Counter(values)
         unique_count = len(counter)
         mode_val_int, mode_count = counter.most_common(1)[0] if counter else (0, 0)
-        is_fixed = unique_count == 1 and len(values) == total
+        is_fixed = unique_count == 1 and len(values) >= 2
 
         heatmap.append(
             ByteHeatmapEntry(
@@ -158,16 +158,15 @@ async def field_mutation(body: FieldMutationRequest):
         parsed_by_name = {f.name: f for f in result.fields}
         for name in field_order:
             pf = parsed_by_name.get(name)
-            if pf and pf.value is not None:
+            if pf and pf.status == "ok" and pf.value is not None:
                 field_values[name].append(pf.value)
-            else:
-                field_values[name].append("")
 
     total_analyzed = len(analyzed_ids)
     mutation_entries: list[FieldMutationEntry] = []
 
     for name in field_order:
         vals = field_values[name]
+        field_total = len(vals)
         if not vals:
             mutation_entries.append(
                 FieldMutationEntry(
@@ -186,7 +185,7 @@ async def field_mutation(body: FieldMutationRequest):
         unique_count = len(counter)
         mode_val, mode_count = counter.most_common(1)[0]
         distribution = {v: c for v, c in counter.items()}
-        mutation_rate = round((total_analyzed - mode_count) / total_analyzed, 4) if total_analyzed > 0 else 0.0
+        mutation_rate = round((field_total - mode_count) / field_total, 4) if field_total > 0 else 0.0
 
         mutation_entries.append(
             FieldMutationEntry(
@@ -196,7 +195,7 @@ async def field_mutation(body: FieldMutationRequest):
                 mode_count=mode_count,
                 distribution=distribution,
                 mutation_rate=mutation_rate,
-                total_samples=total_analyzed,
+                total_samples=field_total,
             )
         )
 
@@ -239,7 +238,7 @@ async def fixed_header_detection(body: FixedHeaderRequest):
             if offset < len(raw):
                 values.append(raw[offset])
 
-        if len(values) == total and len(set(values)) == 1:
+        if len(values) >= 2 and len(set(values)) == 1:
             fixed_mask.append(True)
             fixed_values.append(values[0])
         else:
