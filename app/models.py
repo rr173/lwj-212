@@ -515,3 +515,93 @@ class InferenceResult(BaseModel):
     transitions: list[CandidateTransition]
     total_frames: int
     status: Literal["candidate"] = "candidate"
+
+
+# ============ Fragment Reassembly Models ============
+
+class FragmentGroupCreate(BaseModel):
+    name: str
+    template_id: int
+    template_version: int | None = None
+    reassembly_strategy: Literal["sequential", "length_prefix"] = "sequential"
+    note: str = ""
+
+
+class FragmentGroupOut(BaseModel):
+    id: int
+    name: str
+    template_id: int
+    template_version: int
+    reassembly_strategy: str
+    note: str
+    fragment_count: int
+    created_at: str
+
+
+class FragmentGroupDetailOut(BaseModel):
+    id: int
+    name: str
+    template_id: int
+    template_version: int
+    reassembly_strategy: str
+    note: str
+    fragments: list["FragmentOut"]
+    created_at: str
+
+
+class FragmentAddRequest(BaseModel):
+    seq_num: int = Field(..., ge=1, description="Fragment sequence number, starting from 1")
+    sample_id: int
+
+
+class FragmentOut(BaseModel):
+    id: int
+    group_id: int
+    seq_num: int
+    sample_id: int
+    sample_name: str | None = None
+    sample_byte_length: int | None = None
+    created_at: str
+
+
+class FragmentContribution(BaseModel):
+    seq_num: int
+    sample_id: int
+    start_offset: int
+    end_offset: int
+    is_damaged: bool = False
+    damage_reason: str | None = None
+
+
+class ReassembleResult(BaseModel):
+    group_id: int
+    reassembled_hex: str
+    total_bytes: int
+    parse_result: ParseResult
+    fragment_contributions: list[FragmentContribution]
+    damaged_fragments: list[int]
+
+
+class DetectRequest(BaseModel):
+    sample_ids: list[int] = Field(..., min_length=2, max_length=20, description="Sample IDs to try assembling")
+    template_id: int
+    template_version: int | None = None
+
+
+class DetectCandidate(BaseModel):
+    order: list[int]
+    coverage_percent: float
+    parse_result: ParseResult
+    reassembled_hex: str
+
+
+class DetectResult(BaseModel):
+    template_id: int
+    template_version: int
+    total_samples: int
+    candidates_attempted: int
+    best_candidate: DetectCandidate
+    all_candidates: list[DetectCandidate]
+
+
+FragmentGroupDetailOut.model_rebuild()

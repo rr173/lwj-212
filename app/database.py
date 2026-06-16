@@ -144,6 +144,36 @@ CREATE_SM_TRANSITIONS_FROM_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_sm_transitions_from ON sm_transitions (state_machine_id, from_state_id)
 """
 
+CREATE_FRAGMENT_GROUPS_TABLE = """
+CREATE TABLE IF NOT EXISTS fragment_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    template_id INTEGER NOT NULL,
+    template_version INTEGER NOT NULL DEFAULT 1,
+    reassembly_strategy TEXT NOT NULL CHECK(reassembly_strategy IN ('sequential', 'length_prefix')),
+    note TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_FRAGMENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS fragments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    seq_num INTEGER NOT NULL,
+    sample_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(group_id, seq_num),
+    FOREIGN KEY (group_id) REFERENCES fragment_groups (id) ON DELETE CASCADE,
+    FOREIGN KEY (sample_id) REFERENCES samples (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_FRAGMENTS_GROUP_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_fragments_group ON fragments (group_id, seq_num)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -190,6 +220,9 @@ async def init_db():
         await db.execute(CREATE_SM_TRANSITIONS_TABLE)
         await db.execute(CREATE_SM_TRANSITIONS_SM_INDEX)
         await db.execute(CREATE_SM_TRANSITIONS_FROM_INDEX)
+        await db.execute(CREATE_FRAGMENT_GROUPS_TABLE)
+        await db.execute(CREATE_FRAGMENTS_TABLE)
+        await db.execute(CREATE_FRAGMENTS_GROUP_INDEX)
         await db.commit()
     finally:
         await db.close()
