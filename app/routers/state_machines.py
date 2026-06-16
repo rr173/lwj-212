@@ -572,32 +572,24 @@ async def validate_session(session_id: int, state_machine_id: Optional[int] = No
     can_validate = True
     step = 0
 
+    initial_trans = transitions_by_from.get(current_state_id, [])
+    if len(initial_trans) == 0:
+        can_validate = False
+    else:
+        trigger_fields_in_trans = {t["trigger_field"] for t in initial_trans}
+        first_parse = _parse_result_from_json(frame_rows[0]["parse_result_json"]) if frame_rows else None
+        if first_parse is not None:
+            parsed_field_names = {f.name for f in first_parse.fields}
+            if not trigger_fields_in_trans & parsed_field_names:
+                can_validate = False
+
     for i, frame_row in enumerate(frame_rows):
+        if not can_validate:
+            break
+
         parse_result = _parse_result_from_json(frame_row["parse_result_json"])
         direction = frame_row["direction"]
         seq = frame_row["seq"]
-
-        if i == 0:
-            from_trans = transitions_by_from.get(current_state_id, [])
-            first_frame_match = False
-            for t in from_trans:
-                if t["direction_constraint"] not in (direction, "both"):
-                    continue
-                if parse_result is None:
-                    continue
-                field_val = None
-                for f in parse_result.fields:
-                    if f.name == t["trigger_field"]:
-                        field_val = f.value
-                        break
-                if field_val is not None and str(field_val) == str(t["trigger_value"]):
-                    first_frame_match = True
-                    break
-            if not first_frame_match and len(from_trans) > 0:
-                can_validate = False
-
-        if not can_validate:
-            break
 
         from_trans = transitions_by_from.get(current_state_id, [])
         matched_trans = None
