@@ -142,3 +142,84 @@ class CompareResult(BaseModel):
     only_b_fields: list[FieldDiffOnly]
     parse_result_a: ParseResult
     parse_result_b: ParseResult
+
+
+# ============ Session Models ============
+
+class SessionCreate(BaseModel):
+    name: str
+    template_id: int
+    note: str = ""
+
+
+class SessionOut(BaseModel):
+    id: int
+    name: str
+    template_id: int
+    template_version: int
+    note: str
+    frame_count: int
+    created_at: str
+
+
+class FrameCreate(BaseModel):
+    hex_data: str
+    direction: Literal["request", "response"]
+    relative_timestamp_ms: int
+
+
+class FrameOut(BaseModel):
+    id: int
+    session_id: int
+    seq: int
+    hex_data: str
+    byte_length: int
+    direction: Literal["request", "response"]
+    relative_timestamp_ms: int
+    parse_result: Optional[ParseResult] = None
+
+
+class FrameParseResultOut(BaseModel):
+    frame_id: int
+    parse_result: ParseResult
+
+
+class PairStatus(str):
+    pass
+
+
+class SessionPair(BaseModel):
+    pair_id: int
+    request_frame: Optional[FrameOut] = None
+    response_frame: Optional[FrameOut] = None
+    status: Literal["complete", "unanswered", "unsolicited"]
+    response_delay_ms: Optional[int] = None
+
+
+class SessionPairView(BaseModel):
+    session_id: int
+    pairs: list[SessionPair]
+    orphan_frames: list[FrameOut]
+
+
+class FieldValueDistribution(BaseModel):
+    field_name: str
+    values: dict[str, int]
+
+
+class SessionStats(BaseModel):
+    session_id: int
+    total_frames: int
+    request_count: int
+    response_count: int
+    avg_response_delay_ms: Optional[float]
+    max_response_delay_ms: Optional[int]
+    unanswered_count: int
+    unsolicited_count: int
+    field_distributions: list[FieldValueDistribution]
+
+
+class PlaybackControl(BaseModel):
+    action: Literal["start", "pause", "resume", "seek", "stop"]
+    speed: Optional[float] = Field(default=None, ge=0.25, le=10.0)
+    seek_to_ms: Optional[int] = Field(default=None, ge=0)

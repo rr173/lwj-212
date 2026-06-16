@@ -40,6 +40,43 @@ CREATE TABLE IF NOT EXISTS template_versions (
 )
 """
 
+CREATE_SESSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    template_id INTEGER NOT NULL,
+    template_version INTEGER NOT NULL,
+    note TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE,
+    FOREIGN KEY (template_id, template_version) REFERENCES template_versions (template_id, version) ON DELETE CASCADE
+)
+"""
+
+CREATE_SESSION_FRAMES_TABLE = """
+CREATE TABLE IF NOT EXISTS session_frames (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    hex_data TEXT NOT NULL,
+    byte_length INTEGER NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('request', 'response')),
+    relative_timestamp_ms INTEGER NOT NULL,
+    parse_result_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, seq),
+    FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_SESSION_FRAMES_TS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_session_frames_ts ON session_frames (session_id, relative_timestamp_ms)
+"""
+
+CREATE_SESSION_FRAMES_DIRECTION_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_session_frames_direction ON session_frames (session_id, direction)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -74,6 +111,10 @@ async def init_db():
         await db.execute(CREATE_SAMPLES_TABLE)
         await db.execute(CREATE_TEMPLATES_TABLE)
         await db.execute(CREATE_TEMPLATE_VERSIONS_TABLE)
+        await db.execute(CREATE_SESSIONS_TABLE)
+        await db.execute(CREATE_SESSION_FRAMES_TABLE)
+        await db.execute(CREATE_SESSION_FRAMES_TS_INDEX)
+        await db.execute(CREATE_SESSION_FRAMES_DIRECTION_INDEX)
         await db.commit()
     finally:
         await db.close()
