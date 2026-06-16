@@ -223,3 +223,55 @@ class PlaybackControl(BaseModel):
     action: Literal["start", "pause", "resume", "seek", "stop"]
     speed: Optional[float] = Field(default=None, ge=0.25, le=10.0)
     seek_to_ms: Optional[int] = Field(default=None, ge=0)
+
+
+class FuzzStrategy(str):
+    pass
+
+
+class FuzzGenerateRequest(BaseModel):
+    template_id: int
+    count: int = Field(default=30, ge=1, le=100, description="Number of messages to generate, max 100")
+    strategy_distribution: Optional[dict[str, float]] = Field(
+        default=None,
+        description="Distribution of strategies: normal, boundary, malformed. Sum must be 1.0"
+    )
+    template_version: Optional[int] = None
+
+
+class FuzzGeneratedSample(BaseModel):
+    sample_id: int
+    name: str
+    hex_data: str
+    strategy: Literal["normal", "boundary", "malformed"]
+    parse_result: Optional[ParseResult] = None
+
+
+class FuzzStrategyStats(BaseModel):
+    strategy: Literal["normal", "boundary", "malformed"]
+    total: int
+    success_count: int
+    success_rate: float
+    avg_coverage: float
+    min_coverage: float
+    max_coverage: float
+
+
+class FuzzTemplateDefect(BaseModel):
+    sample_name: str
+    sample_id: int
+    field_name: str
+    error: str
+    hex_data: str
+
+
+class FuzzReport(BaseModel):
+    template_id: int
+    template_version: int
+    template_name: str
+    total_generated: int
+    strategy_stats: list[FuzzStrategyStats]
+    field_error_ranking: list[dict]
+    coverage_overview: dict
+    template_defects: list[FuzzTemplateDefect]
+    samples: list[FuzzGeneratedSample]
