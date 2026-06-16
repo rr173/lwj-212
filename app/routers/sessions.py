@@ -465,9 +465,19 @@ async def get_session_stats(session_id: int):
 
     pairs, _ = _compute_pairs(frames)
     complete_pairs = [p for p in pairs if p.status == "complete"]
-    delays = [p.response_delay_ms for p in complete_pairs if p.response_delay_ms is not None]
-    avg_delay = round(sum(delays) / len(delays), 2) if delays else None
-    max_delay = max(delays) if delays else None
+    delays = []
+    for p in complete_pairs:
+        if p.response_delay_ms is not None:
+            delays.append(p.response_delay_ms)
+
+    avg_delay = None
+    max_delay = None
+    if len(delays) > 0:
+        try:
+            avg_delay = round(sum(delays) / len(delays), 2)
+            max_delay = max(delays)
+        except (ZeroDivisionError, ValueError):
+            pass
 
     unanswered_count = sum(1 for p in pairs if p.status == "unanswered")
     unsolicited_count = sum(1 for p in pairs if p.status == "unsolicited")
@@ -540,38 +550,53 @@ async def session_playback(
         "total_duration_ms": frames[-1].relative_timestamp_ms if frames else 0,
     })
 
+    started = False
     paused = False
+    stopped = False
     current_idx = 0
-    seek_to_ms: Optional[int] = None
     current_speed = speed
+    pending_seek: Optional[int] = None
+    pause_event = asyncio.Event()
+    pause_event.set()
 
     playback_task: Optional[asyncio.Task] = None
 
-    async def run_playback():
-        nonlocal current_idx, paused, current_speed, seek_to_ms
+    async def process_seek(target_ms: int):
+        nonlocal current_idx, pending_seek
+        pending_seek = None
+        current_idx = 0
+        for i, f in enumerate(frames):
+            if f.relative_timestamp_ms >= target_ms:
+                current_idx = i
+                break
+        await websocket.send_json({
+            "type": "seek_complete",
+            "target_ms": target_ms,
+            "frame_index": current_idx,
+        })
 
-        while True:
-            if seek_to_ms is not None:
-                target = seek_to_ms
-                seek_to_ms = None
-                current_idx = 0
-                for i, f in enumerate(frames):
-                    if f.relative_timestamp_ms >= target:
-                        current_idx = i
-                        break
-                await websocket.send_json({
-                    "type": "seek_complete",
-                    "target_ms": target,
-                    "frame_index": current_idx,
-                })
+    async def run_playback():
+        nonlocal current_idx, current_speed, pending_seek, stopped
+
+        while not stopped:
+            if not started:
+                await asyncio.sleep(0.05)
+                continue
+
+            if pending_seek is not None:
+                await process_seek(pending_seek)
+                continue
 
             if paused:
-                await asyncio.sleep(0.05)
+                await pause_event.wait()
                 continue
 
             if current_idx >= len(frames):
                 await websocket.send_json({"type": "playback_complete"})
                 break
+
+            if pending_seek is not None:
+                continue
 
             frame = frames[current_idx]
             next_frame = frames[current_idx + 1] if current_idx + 1 < len(frames) else None
@@ -582,57 +607,126 @@ async def session_playback(
                 "data": FrameOut.model_validate(frame).model_dump(mode="json"),
             })
 
+            if pending_seek is not None:
+                current_idx += 1
+                continue
+
             if next_frame is not None:
                 interval_ms = next_frame.relative_timestamp_ms - frame.relative_timestamp_ms
                 sleep_s = (interval_ms / 1000.0) / current_speed
+
+                sleep_remaining = sleep_s
+                while sleep_remaining > 0 and not stopped and pending_seek is None:
+                    chunk = min(sleep_remaining, 0.02)
+                    try:
+                        await asyncio.wait_for(pause_event.wait(), timeout=chunk)
+                    except asyncio.TimeoutError:
+                        pass
+                    sleep_remaining -= chunk
+
+                if pending_seek is not None:
+                    current_idx += 1
+                    continue
+                if stopped:
+                    break
+
                 current_idx += 1
-                await asyncio.sleep(sleep_s)
             else:
                 current_idx += 1
 
     playback_task = asyncio.create_task(run_playback())
 
     try:
-        while True:
+        while not stopped:
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=1.0)
                 action = data.get("action")
 
-                if action == "pause":
-                    paused = True
-                    await websocket.send_json({"type": "paused", "frame_index": current_idx})
+                if action == "start":
+                    if not started:
+                        started = True
+                        await websocket.send_json({
+                            "type": "started",
+                            "frame_index": current_idx,
+                            "speed": current_speed,
+                        })
+                    else:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "playback already started",
+                        })
+
+                elif action == "pause":
+                    if not started:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "playback not started, send 'start' first",
+                        })
+                    elif not paused:
+                        paused = True
+                        pause_event.clear()
+                        await websocket.send_json({"type": "paused", "frame_index": current_idx})
 
                 elif action == "resume":
-                    paused = False
-                    await websocket.send_json({"type": "resumed", "frame_index": current_idx})
+                    if not started:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "playback not started, send 'start' first",
+                        })
+                    elif paused:
+                        paused = False
+                        pause_event.set()
+                        await websocket.send_json({"type": "resumed", "frame_index": current_idx})
 
                 elif action == "seek":
                     seek_ms = data.get("seek_to_ms", 0)
                     if isinstance(seek_ms, int) and seek_ms >= 0:
-                        seek_to_ms = seek_ms
+                        if started and not paused:
+                            pending_seek = seek_ms
+                            pause_event.set()
+                        else:
+                            await process_seek(seek_ms)
 
                 elif action == "set_speed":
                     new_speed = data.get("speed", 1.0)
                     if isinstance(new_speed, (int, float)) and 0.25 <= new_speed <= 10.0:
                         current_speed = float(new_speed)
+                        pause_event.set()
                         await websocket.send_json({
                             "type": "speed_changed",
                             "speed": current_speed,
                         })
 
                 elif action == "stop":
+                    stopped = True
+                    pause_event.set()
                     if playback_task and not playback_task.done():
-                        playback_task.cancel()
+                        try:
+                            await asyncio.wait_for(playback_task, timeout=1.0)
+                        except Exception:
+                            playback_task.cancel()
                     await websocket.send_json({"type": "stopped"})
                     break
 
+                else:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"unknown action: {action}",
+                    })
+
             except asyncio.TimeoutError:
+                if playback_task and playback_task.done():
+                    break
                 continue
 
     except WebSocketDisconnect:
+        stopped = True
+        pause_event.set()
         if playback_task and not playback_task.done():
             playback_task.cancel()
     except Exception as e:
+        stopped = True
+        pause_event.set()
         if playback_task and not playback_task.done():
             playback_task.cancel()
         try:
