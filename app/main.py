@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts
 
 
 @asynccontextmanager
@@ -14,8 +14,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Binary Protocol Parsing Workbench",
-    description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, and fragment reassembly.",
-    version="1.5.0",
+    description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, and alert rule engine.",
+    version="1.6.0",
     lifespan=lifespan,
 )
 
@@ -28,13 +28,14 @@ app.include_router(fingerprints.router)
 app.include_router(analysis.router)
 app.include_router(state_machines.router)
 app.include_router(fragments.router)
+app.include_router(alerts.router)
 
 
 @app.get("/")
 async def root():
     return {
         "service": "Binary Protocol Parsing Workbench",
-        "version": "1.5.0",
+        "version": "1.6.0",
         "docs": "/docs",
         "features": [
             "Protocol template management with versioning",
@@ -52,5 +53,9 @@ async def root():
             "Automatic state machine inference from sessions",
             "Fragment reassembly & packet defragmentation",
             "Auto-detection of optimal fragment order",
+            "Alert rule engine — define field-based anomaly detection rules",
+            "Cross-field & logical rule conditions (AND/OR/NOT)",
+            "Single-sample alert detection & batch scan with severity ranking",
+            "Rule dry-run test with per-condition evaluation trace",
         ],
     }

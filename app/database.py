@@ -174,6 +174,23 @@ CREATE_FRAGMENTS_GROUP_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_fragments_group ON fragments (group_id, seq_num)
 """
 
+CREATE_ALERT_RULES_TABLE = """
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'critical')),
+    expression_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE,
+    UNIQUE(template_id, name)
+)
+"""
+
+CREATE_ALERT_RULES_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_alert_rules_template ON alert_rules (template_id)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -223,6 +240,8 @@ async def init_db():
         await db.execute(CREATE_FRAGMENT_GROUPS_TABLE)
         await db.execute(CREATE_FRAGMENTS_TABLE)
         await db.execute(CREATE_FRAGMENTS_GROUP_INDEX)
+        await db.execute(CREATE_ALERT_RULES_TABLE)
+        await db.execute(CREATE_ALERT_RULES_TEMPLATE_INDEX)
         await db.commit()
     finally:
         await db.close()

@@ -605,3 +605,103 @@ class DetectResult(BaseModel):
 
 
 FragmentGroupDetailOut.model_rebuild()
+
+
+# ============ Alert Rule Models ============
+
+NUMERIC_TYPES = {"uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"}
+STRING_TYPES = {"bytes", "ascii"}
+
+
+class ConditionCompare(BaseModel):
+    type: Literal["compare"] = "compare"
+    field: str
+    op: Literal["==", "!=", ">", "<", ">=", "<="]
+    value: str | int | float | None = None
+    field_ref: str | None = None
+
+
+class ConditionLogical(BaseModel):
+    type: Literal["and", "or", "not"]
+    conditions: list["ConditionExpr"]
+
+
+ConditionExpr = ConditionCompare | ConditionLogical
+ConditionLogical.model_rebuild()
+
+
+class AlertRuleCreate(BaseModel):
+    template_id: int
+    name: str
+    severity: Literal["info", "warning", "critical"]
+    expression: ConditionExpr
+
+
+class AlertRuleOut(BaseModel):
+    id: int
+    template_id: int
+    name: str
+    severity: Literal["info", "warning", "critical"]
+    expression: dict
+    created_at: str
+
+
+class TriggeredAlert(BaseModel):
+    rule_id: int
+    rule_name: str
+    severity: Literal["info", "warning", "critical"]
+    field_values: dict[str, str | int | float | None]
+
+
+class DetectAlertsRequest(BaseModel):
+    sample_id: int
+    template_id: int | None = None
+
+
+class DetectAlertsResult(BaseModel):
+    sample_id: int
+    template_id: int
+    template_version: int
+    parse_result: ParseResult
+    triggered_alerts: list[TriggeredAlert]
+
+
+class ScanAlertsRequest(BaseModel):
+    sample_ids: list[int]
+    template_id: int
+
+
+class CriticalAlertDetail(BaseModel):
+    sample_id: int
+    rule_name: str
+    field_values: dict[str, str | int | float | None]
+
+
+class ScanAlertsResult(BaseModel):
+    template_id: int
+    template_version: int
+    total_samples: int
+    samples_with_alerts: int
+    rule_trigger_ranking: list[dict]
+    severity_stats: dict[str, int]
+    critical_alerts: list[CriticalAlertDetail]
+
+
+class DryRunRequest(BaseModel):
+    sample_id: int
+    template_id: int | None = None
+    expression: ConditionExpr
+
+
+class ConditionEvaluation(BaseModel):
+    description: str
+    result: bool | None
+
+
+class DryRunResult(BaseModel):
+    sample_id: int
+    template_id: int
+    template_version: int
+    triggered: bool
+    field_values: dict[str, str | int | float | None]
+    evaluations: list[ConditionEvaluation]
