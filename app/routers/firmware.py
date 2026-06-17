@@ -32,8 +32,9 @@ def _sha256_hash(data: bytes) -> str:
 
 
 def _parse_version(version_str: str) -> tuple:
+    cleaned = version_str.strip().lstrip("vV")
     parts = []
-    for part in version_str.split("."):
+    for part in cleaned.split("."):
         try:
             parts.append(int(part))
         except ValueError:
@@ -437,8 +438,9 @@ def _do_diff_analysis(
                 i += 1
             diff_len = i - diff_start
 
-            old_preview = bytes_to_hex(data_a[diff_start:diff_start + 16])
-            new_preview = bytes_to_hex(data_b[diff_start:diff_start + 16])
+            preview_len = min(16, diff_len)
+            old_preview = bytes_to_hex(data_a[diff_start:diff_start + preview_len])
+            new_preview = bytes_to_hex(data_b[diff_start:diff_start + preview_len])
 
             seg = _find_segment_for_offset(diff_start, segs_a) or _find_segment_for_offset(diff_start, segs_b)
 
@@ -460,13 +462,14 @@ def _do_diff_analysis(
     if len_b > len_a:
         added_start = len_a
         added_bytes = len_b - len_a
+        preview_len = min(16, added_bytes)
         seg = _find_segment_for_offset(added_start, segs_b)
         diff_intervals.append(
             DiffInterval(
                 start_offset=added_start,
                 length=added_bytes,
                 old_hex_preview=None,
-                new_hex_preview=bytes_to_hex(data_b[added_start:added_start + 16]),
+                new_hex_preview=bytes_to_hex(data_b[added_start:added_start + preview_len]),
                 region_type="added",
                 segment_name=seg["name"] if seg else None,
                 segment_type=seg["segment_type"] if seg else None,
@@ -475,12 +478,13 @@ def _do_diff_analysis(
     elif len_a > len_b:
         removed_start = len_b
         removed_bytes = len_a - len_b
+        preview_len = min(16, removed_bytes)
         seg = _find_segment_for_offset(removed_start, segs_a)
         diff_intervals.append(
             DiffInterval(
                 start_offset=removed_start,
                 length=removed_bytes,
-                old_hex_preview=bytes_to_hex(data_a[removed_start:removed_start + 16]),
+                old_hex_preview=bytes_to_hex(data_a[removed_start:removed_start + preview_len]),
                 new_hex_preview=None,
                 region_type="removed",
                 segment_name=seg["name"] if seg else None,
@@ -606,24 +610,43 @@ async def get_change_summary(body: DiffRequest):
         ((different_bytes + added_bytes + removed_bytes) / max_total) * 100, 2
     ) if max_total > 0 else 0.0
 
+    len_a = len(data_a)
+    len_b = len(data_b)
+
     all_segments = {}
     for seg in segs_a:
+        seg_start = seg["start_offset"]
+        seg_end = seg["end_offset"]
+        actual_end_a = min(seg_end, len_a)
         all_segments[seg["name"]] = {
             "name": seg["name"],
             "type": seg["segment_type"],
-            "start": seg["start_offset"],
-            "end": seg["end_offset"],
-            "length": seg["end_offset"] - seg["start_offset"],
+            "start_a": seg_start,
+            "end_a": seg_end,
+            "actual_end_a": actual_end_a,
+            "start_b": None,
+            "end_b": None,
+            "actual_end_b": None,
             "changed": 0,
         }
     for seg in segs_b:
-        if seg["name"] not in all_segments:
+        seg_start = seg["start_offset"]
+        seg_end = seg["end_offset"]
+        actual_end_b = min(seg_end, len_b)
+        if seg["name"] in all_segments:
+            all_segments[seg["name"]]["start_b"] = seg_start
+            all_segments[seg["name"]]["end_b"] = seg_end
+            all_segments[seg["name"]]["actual_end_b"] = actual_end_b
+        else:
             all_segments[seg["name"]] = {
                 "name": seg["name"],
                 "type": seg["segment_type"],
-                "start": seg["start_offset"],
-                "end": seg["end_offset"],
-                "length": seg["end_offset"] - seg["start_offset"],
+                "start_a": None,
+                "end_a": None,
+                "actual_end_a": None,
+                "start_b": seg_start,
+                "end_b": seg_end,
+                "actual_end_b": actual_end_b,
                 "changed": 0,
             }
 
@@ -631,8 +654,16 @@ async def get_change_summary(body: DiffRequest):
         iv_start = interval.start_offset
         iv_end = interval.start_offset + interval.length
         for seg_name, seg_info in all_segments.items():
-            overlap_start = max(iv_start, seg_info["start"])
-            overlap_end = min(iv_end, seg_info["end"])
+            union_start = min(
+                seg_info["start_a"] if seg_info["start_a"] is not None else float('inf'),
+                seg_info["start_b"] if seg_info["start_b"] is not None else float('inf'),
+            )
+            union_end = max(
+                seg_info["end_a"] if seg_info["end_a"] is not None else 0,
+                seg_info["end_b"] if seg_info["end_b"] is not None else 0,
+            )
+            overlap_start = max(iv_start, union_start)
+            overlap_end = min(iv_end, union_end)
             if overlap_start < overlap_end:
                 seg_info["changed"] += overlap_end - overlap_start
 
@@ -640,15 +671,46 @@ async def get_change_summary(body: DiffRequest):
     has_bootloader_change = False
     has_config_change = False
 
-    for seg_info in sorted(all_segments.values(), key=lambda x: x["start"]):
-        change_density = round(seg_info["changed"] / seg_info["length"], 4) if seg_info["length"] > 0 else 0.0
+    for seg_name, seg_info in sorted(all_segments.items(), key=lambda x: (
+        min(x[1]["start_a"] if x[1]["start_a"] is not None else float('inf'),
+            x[1]["start_b"] if x[1]["start_b"] is not None else float('inf'))
+    )):
+        union_start = min(
+            seg_info["start_a"] if seg_info["start_a"] is not None else float('inf'),
+            seg_info["start_b"] if seg_info["start_b"] is not None else float('inf'),
+        )
+        union_end = max(
+            seg_info["end_a"] if seg_info["end_a"] is not None else 0,
+            seg_info["end_b"] if seg_info["end_b"] is not None else 0,
+        )
+        display_start = union_start
+        display_end = union_end
+        display_length = display_end - display_start
+
+        actual_end_a = seg_info.get("actual_end_a")
+        actual_end_b = seg_info.get("actual_end_b")
+
+        a_start = seg_info["start_a"] if seg_info["start_a"] is not None else union_start
+        a_end = actual_end_a if actual_end_a is not None else a_start
+        b_start = seg_info["start_b"] if seg_info["start_b"] is not None else union_start
+        b_end = actual_end_b if actual_end_b is not None else b_start
+
+        range_union_start = min(a_start, b_start)
+        range_union_end = max(a_end, b_end)
+        effective_length = max(0, range_union_end - range_union_start)
+
+        if effective_length > 0:
+            change_density = round(min(seg_info["changed"] / effective_length, 1.0), 4)
+        else:
+            change_density = 0.0
+
         segment_changes.append(
             SegmentChangeSummary(
                 segment_name=seg_info["name"],
                 segment_type=seg_info["type"],
-                start_offset=seg_info["start"],
-                end_offset=seg_info["end"],
-                total_length=seg_info["length"],
+                start_offset=display_start,
+                end_offset=display_end,
+                total_length=display_length,
                 changed_bytes=seg_info["changed"],
                 change_density=change_density,
             )
@@ -727,11 +789,24 @@ async def batch_compare_device_model(body: BatchCompareRequest):
 
         seg_changes = {}
         all_segs_local = {}
-        for seg in segs_a + segs_b:
-            if seg["name"] not in all_segs_local:
+        for seg in segs_a:
+            all_segs_local[seg["name"]] = {
+                "start_a": seg["start_offset"],
+                "end_a": seg["end_offset"],
+                "start_b": None,
+                "end_b": None,
+                "type": seg["segment_type"],
+            }
+        for seg in segs_b:
+            if seg["name"] in all_segs_local:
+                all_segs_local[seg["name"]]["start_b"] = seg["start_offset"]
+                all_segs_local[seg["name"]]["end_b"] = seg["end_offset"]
+            else:
                 all_segs_local[seg["name"]] = {
-                    "start": seg["start_offset"],
-                    "end": seg["end_offset"],
+                    "start_a": None,
+                    "end_a": None,
+                    "start_b": seg["start_offset"],
+                    "end_b": seg["end_offset"],
                     "type": seg["segment_type"],
                 }
 
@@ -740,8 +815,16 @@ async def batch_compare_device_model(body: BatchCompareRequest):
             iv_start = interval.start_offset
             iv_end = interval.start_offset + interval.length
             for seg_name, seg_info in all_segs_local.items():
-                overlap_start = max(iv_start, seg_info["start"])
-                overlap_end = min(iv_end, seg_info["end"])
+                union_start = min(
+                    seg_info["start_a"] if seg_info["start_a"] is not None else float('inf'),
+                    seg_info["start_b"] if seg_info["start_b"] is not None else float('inf'),
+                )
+                union_end = max(
+                    seg_info["end_a"] if seg_info["end_a"] is not None else 0,
+                    seg_info["end_b"] if seg_info["end_b"] is not None else 0,
+                )
+                overlap_start = max(iv_start, union_start)
+                overlap_end = min(iv_end, union_end)
                 if overlap_start < overlap_end:
                     seg_changes[seg_name] = seg_changes.get(seg_name, 0) + (overlap_end - overlap_start)
                     if seg_info["type"] == "bootloader":
