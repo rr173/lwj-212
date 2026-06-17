@@ -1,6 +1,11 @@
 import hashlib
+import hmac
 from fastapi import APIRouter, HTTPException, Query
 from typing import Literal
+from collections import Counter
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.backends import default_backend
 from app.models import (
     FirmwareCreate, FirmwareOut, FirmwareDetailOut,
     SegmentCreate, SegmentOut,
@@ -8,6 +13,9 @@ from app.models import (
     ChangeSummary, SegmentChangeSummary,
     BatchCompareRequest, BatchCompareResult, VersionEvolutionEntry,
     AutoPaddingResult,
+    SignatureCreate, SignatureOut,
+    VerifyRequest, VerifyResult, VerifyFailureDetail,
+    FirmwareSignatureStatus, SignatureChainAuditResult,
     MAX_FIRMWARE_SIZE, PADDING_THRESHOLD,
 )
 from app.database import get_db
@@ -413,6 +421,318 @@ async def auto_detect_padding(firmware_id: int):
     )
 
 
+def _is_valid_hex(s: str) -> bool:
+    try:
+        bytes.fromhex(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _compute_hmac_sha256(data: bytes, key_hex: str) -> str:
+    key = bytes.fromhex(key_hex)
+    return hmac.new(key, data, hashlib.sha256).hexdigest()
+
+
+def _verify_ed25519(data: bytes, signature_hex: str, public_key_hex: str) -> tuple[bool, str]:
+    try:
+        public_key_bytes = bytes.fromhex(public_key_hex)
+    except ValueError:
+        return False, "公钥格式错误：不是有效的hex字符串"
+    try:
+        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+    except ValueError as e:
+        return False, f"公钥格式错误：{str(e)}"
+    try:
+        signature_bytes = bytes.fromhex(signature_hex)
+    except ValueError:
+        return False, "签名格式错误：不是有效的hex字符串"
+    try:
+        public_key.verify(signature_bytes, data)
+        return True, ""
+    except InvalidSignature:
+        return False, "签名校验失败：签名与数据不匹配"
+    except Exception as e:
+        return False, f"验签过程出错：{str(e)}"
+
+
+def _compute_signature(data: bytes, algorithm: str, key_hex: str) -> tuple[str | None, str | None]:
+    if algorithm == "hmac-sha256":
+        try:
+            sig = _compute_hmac_sha256(data, key_hex)
+            return sig, None
+        except ValueError:
+            return None, "密钥格式错误：不是有效的hex字符串"
+    elif algorithm == "ed25519":
+        return None, "ed25519算法不支持重新计算签名（仅支持验签）"
+    else:
+        return None, f"不支持的算法: {algorithm}"
+
+
+@router.post("/{firmware_id}/signature", response_model=SignatureOut, status_code=201)
+async def add_signature(firmware_id: int, body: SignatureCreate):
+    db = await get_db()
+    try:
+        fw_row = await db.execute_fetchall(
+            "SELECT id FROM firmwares WHERE id = ?", (firmware_id,)
+        )
+        if not fw_row:
+            raise HTTPException(status_code=404, detail="firmware not found")
+
+        existing_sig = await db.execute_fetchall(
+            "SELECT id FROM firmware_signatures WHERE firmware_id = ?", (firmware_id,)
+        )
+        if existing_sig:
+            raise HTTPException(
+                status_code=400,
+                detail="该固件已有签名记录，不允许重复添加，请先删除旧签名"
+            )
+
+        if not _is_valid_hex(body.signature_hex):
+            raise HTTPException(status_code=400, detail="signature_hex 不是有效的hex字符串")
+
+        cursor = await db.execute(
+            """
+            INSERT INTO firmware_signatures (firmware_id, algorithm, signature_hex, key_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (firmware_id, body.algorithm, body.signature_hex.lower(), body.key_id),
+        )
+        await db.commit()
+        sig_id = cursor.lastrowid
+
+        sig_row = await db.execute_fetchall(
+            "SELECT * FROM firmware_signatures WHERE id = ?", (sig_id,)
+        )
+    finally:
+        await db.close()
+
+    s = sig_row[0]
+    return SignatureOut(
+        id=s["id"],
+        firmware_id=s["firmware_id"],
+        algorithm=s["algorithm"],
+        signature_hex=s["signature_hex"],
+        key_id=s["key_id"],
+        created_at=s["created_at"] or "",
+    )
+
+
+@router.get("/{firmware_id}/signature", response_model=SignatureOut)
+async def get_signature(firmware_id: int):
+    db = await get_db()
+    try:
+        fw_row = await db.execute_fetchall(
+            "SELECT id FROM firmwares WHERE id = ?", (firmware_id,)
+        )
+        if not fw_row:
+            raise HTTPException(status_code=404, detail="firmware not found")
+
+        sig_row = await db.execute_fetchall(
+            "SELECT * FROM firmware_signatures WHERE firmware_id = ?", (firmware_id,)
+        )
+        if not sig_row:
+            raise HTTPException(status_code=404, detail="该固件没有签名记录")
+    finally:
+        await db.close()
+
+    s = sig_row[0]
+    return SignatureOut(
+        id=s["id"],
+        firmware_id=s["firmware_id"],
+        algorithm=s["algorithm"],
+        signature_hex=s["signature_hex"],
+        key_id=s["key_id"],
+        created_at=s["created_at"] or "",
+    )
+
+
+@router.delete("/{firmware_id}/signature", status_code=204)
+async def delete_signature(firmware_id: int):
+    db = await get_db()
+    try:
+        fw_row = await db.execute_fetchall(
+            "SELECT id FROM firmwares WHERE id = ?", (firmware_id,)
+        )
+        if not fw_row:
+            raise HTTPException(status_code=404, detail="firmware not found")
+
+        sig_row = await db.execute_fetchall(
+            "SELECT id FROM firmware_signatures WHERE firmware_id = ?", (firmware_id,)
+        )
+        if not sig_row:
+            raise HTTPException(status_code=404, detail="该固件没有签名记录")
+
+        await db.execute("DELETE FROM firmware_signatures WHERE firmware_id = ?", (firmware_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+@router.post("/{firmware_id}/verify", response_model=VerifyResult)
+async def verify_firmware_integrity(firmware_id: int, body: VerifyRequest):
+    db = await get_db()
+    try:
+        fw_row = await db.execute_fetchall(
+            "SELECT * FROM firmwares WHERE id = ?", (firmware_id,)
+        )
+        if not fw_row:
+            raise HTTPException(status_code=404, detail="firmware not found")
+
+        sig_row = await db.execute_fetchall(
+            "SELECT * FROM firmware_signatures WHERE firmware_id = ?", (firmware_id,)
+        )
+    finally:
+        await db.close()
+
+    fw = fw_row[0]
+    data = hex_to_bytes(fw["hex_data"])
+
+    if not sig_row:
+        return VerifyResult(
+            firmware_id=firmware_id,
+            status="no_signature",
+        )
+
+    sig = sig_row[0]
+    algorithm = sig["algorithm"]
+    stored_sig = sig["signature_hex"]
+
+    if not _is_valid_hex(body.key_hex):
+        return VerifyResult(
+            firmware_id=firmware_id,
+            status="failed",
+            algorithm=algorithm,
+            key_id=sig["key_id"],
+            expected_signature_hex=stored_sig,
+            error_message="密钥格式错误：不是有效的hex字符串",
+        )
+
+    if algorithm == "hmac-sha256":
+        computed_sig, err = _compute_signature(data, algorithm, body.key_hex)
+        if err:
+            return VerifyResult(
+                firmware_id=firmware_id,
+                status="failed",
+                algorithm=algorithm,
+                key_id=sig["key_id"],
+                expected_signature_hex=stored_sig,
+                error_message=err,
+            )
+        passed = hmac.compare_digest(computed_sig.lower(), stored_sig.lower())
+        return VerifyResult(
+            firmware_id=firmware_id,
+            status="passed" if passed else "failed",
+            algorithm=algorithm,
+            key_id=sig["key_id"],
+            expected_signature_hex=stored_sig,
+            actual_signature_hex=computed_sig,
+        )
+    elif algorithm == "ed25519":
+        ok, err_msg = _verify_ed25519(data, stored_sig, body.key_hex)
+        return VerifyResult(
+            firmware_id=firmware_id,
+            status="passed" if ok else "failed",
+            algorithm=algorithm,
+            key_id=sig["key_id"],
+            expected_signature_hex=stored_sig,
+            error_message=None if ok else err_msg,
+        )
+    else:
+        return VerifyResult(
+            firmware_id=firmware_id,
+            status="failed",
+            algorithm=algorithm,
+            key_id=sig["key_id"],
+            expected_signature_hex=stored_sig,
+            error_message=f"不支持的算法: {algorithm}",
+        )
+
+
+@router.get("/signature-audit/{device_model}", response_model=SignatureChainAuditResult)
+async def audit_signature_chain(device_model: str):
+    db = await get_db()
+    try:
+        fw_rows = await db.execute_fetchall(
+            "SELECT * FROM firmwares WHERE device_model = ? ORDER BY id", (device_model,)
+        )
+        if not fw_rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"device model '{device_model}' not found",
+            )
+
+        fw_ids = [r["id"] for r in fw_rows]
+        placeholders = ",".join("?" for _ in fw_ids)
+        sig_rows = await db.execute_fetchall(
+            f"SELECT * FROM firmware_signatures WHERE firmware_id IN ({placeholders})",
+            fw_ids,
+        )
+        sig_map = {s["firmware_id"]: s for s in sig_rows}
+    finally:
+        await db.close()
+
+    details: list[FirmwareSignatureStatus] = []
+    key_ids: list[str] = []
+    algorithms: list[str] = []
+    signed_count = 0
+    unsigned_count = 0
+
+    for fw in fw_rows:
+        sig = sig_map.get(fw["id"])
+        has_sig = sig is not None
+        if has_sig:
+            signed_count += 1
+            key_ids.append(sig["key_id"])
+            algorithms.append(sig["algorithm"])
+        else:
+            unsigned_count += 1
+
+        details.append(
+            FirmwareSignatureStatus(
+                firmware_id=fw["id"],
+                firmware_name=fw["name"],
+                version=fw["version"],
+                has_signature=has_sig,
+                algorithm=sig["algorithm"] if sig else None,
+                key_id=sig["key_id"] if sig else None,
+                created_at=sig["created_at"] if sig else None,
+            )
+        )
+
+    unique_key_ids = sorted(list(set(key_ids)))
+    unique_algorithms = sorted(list(set(algorithms)))
+
+    key_id_consistent = len(unique_key_ids) <= 1 if key_ids else True
+    algorithm_consistent = len(unique_algorithms) <= 1 if algorithms else True
+
+    anomalies: list[str] = []
+    if unsigned_count > 0:
+        anomalies.append(f"发现 {unsigned_count} 个固件未签名")
+    if not key_id_consistent:
+        anomalies.append(
+            f"密钥标识不一致：检测到 {len(unique_key_ids)} 个不同的key_id: {', '.join(unique_key_ids)}"
+        )
+    if not algorithm_consistent:
+        anomalies.append(
+            f"签名算法不一致：检测到 {len(unique_algorithms)} 个不同算法: {', '.join(unique_algorithms)}"
+        )
+
+    return SignatureChainAuditResult(
+        device_model=device_model,
+        total_firmwares=len(fw_rows),
+        signed_count=signed_count,
+        unsigned_count=unsigned_count,
+        unique_key_ids=unique_key_ids,
+        key_id_consistent=key_id_consistent,
+        inconsistent_key_ids=unique_key_ids if not key_id_consistent else [],
+        algorithm_consistent=algorithm_consistent,
+        inconsistent_algorithms=unique_algorithms if not algorithm_consistent else [],
+        details=details,
+        anomalies=anomalies,
+    )
+
+
 def _do_diff_analysis(
     data_a: bytes, data_b: bytes,
     segs_a: list, segs_b: list,
@@ -520,6 +840,13 @@ async def compare_firmwares(body: DiffRequest):
                 detail=f"cannot compare different device models: {fw_a['device_model']} vs {fw_b['device_model']}",
             )
 
+        sig_a_row = await db.execute_fetchall(
+            "SELECT * FROM firmware_signatures WHERE firmware_id = ?", (body.firmware_a_id,)
+        )
+        sig_b_row = await db.execute_fetchall(
+            "SELECT * FROM firmware_signatures WHERE firmware_id = ?", (body.firmware_b_id,)
+        )
+
         segs_a = await db.execute_fetchall(
             "SELECT * FROM firmware_segments WHERE firmware_id = ? ORDER BY start_offset",
             (body.firmware_a_id,),
@@ -530,6 +857,106 @@ async def compare_firmwares(body: DiffRequest):
         )
     finally:
         await db.close()
+
+    has_sig_a = len(sig_a_row) > 0
+    has_sig_b = len(sig_b_row) > 0
+
+    integrity_warnings: list[str] = []
+    verify_failures: list[VerifyFailureDetail] = []
+    integrity_verified = False
+
+    sig_a = sig_a_row[0] if has_sig_a else None
+    sig_b = sig_b_row[0] if has_sig_b else None
+
+    if has_sig_a and has_sig_b:
+        if body.key_hex is None:
+            integrity_warnings.append("双方固件均有签名，但未提供密钥，未验证完整性")
+        else:
+            data_a = hex_to_bytes(fw_a["hex_data"])
+            data_b = hex_to_bytes(fw_b["hex_data"])
+            all_passed = True
+
+            for fw, sig, data, label in [
+                (fw_a, sig_a, data_a, "A"),
+                (fw_b, sig_b, data_b, "B"),
+            ]:
+                algorithm = sig["algorithm"]
+                stored_sig = sig["signature_hex"]
+
+                if not _is_valid_hex(body.key_hex):
+                    verify_failures.append(
+                        VerifyFailureDetail(
+                            firmware_id=fw["id"],
+                            firmware_name=fw["name"],
+                            status="failed",
+                            algorithm=algorithm,
+                            expected_signature_hex=stored_sig,
+                            error_message="密钥格式错误：不是有效的hex字符串",
+                        )
+                    )
+                    all_passed = False
+                    continue
+
+                if algorithm == "hmac-sha256":
+                    computed_sig, err = _compute_signature(data, algorithm, body.key_hex)
+                    if err:
+                        verify_failures.append(
+                            VerifyFailureDetail(
+                                firmware_id=fw["id"],
+                                firmware_name=fw["name"],
+                                status="failed",
+                                algorithm=algorithm,
+                                expected_signature_hex=stored_sig,
+                                error_message=err,
+                            )
+                        )
+                        all_passed = False
+                    else:
+                        passed = hmac.compare_digest(computed_sig.lower(), stored_sig.lower())
+                        if not passed:
+                            verify_failures.append(
+                                VerifyFailureDetail(
+                                    firmware_id=fw["id"],
+                                    firmware_name=fw["name"],
+                                    status="failed",
+                                    algorithm=algorithm,
+                                    expected_signature_hex=stored_sig,
+                                    actual_signature_hex=computed_sig,
+                                )
+                            )
+                            all_passed = False
+                elif algorithm == "ed25519":
+                    ok, err_msg = _verify_ed25519(data, stored_sig, body.key_hex)
+                    if not ok:
+                        verify_failures.append(
+                            VerifyFailureDetail(
+                                firmware_id=fw["id"],
+                                firmware_name=fw["name"],
+                                status="failed",
+                                algorithm=algorithm,
+                                expected_signature_hex=stored_sig,
+                                error_message=err_msg,
+                            )
+                        )
+                        all_passed = False
+
+            if not all_passed:
+                failed_names = [v.firmware_name for v in verify_failures]
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "完整性校验失败，拒绝对比",
+                        "verify_failures": [v.model_dump() for v in verify_failures],
+                    },
+                )
+            integrity_verified = True
+    else:
+        if has_sig_a and not has_sig_b:
+            integrity_warnings.append("仅固件A有签名，固件B未签名")
+        elif not has_sig_a and has_sig_b:
+            integrity_warnings.append("仅固件B有签名，固件A未签名")
+        else:
+            integrity_warnings.append("双方固件均未签名")
 
     data_a = hex_to_bytes(fw_a["hex_data"])
     data_b = hex_to_bytes(fw_b["hex_data"])
@@ -559,6 +986,9 @@ async def compare_firmwares(body: DiffRequest):
         added_bytes=added_bytes,
         removed_bytes=removed_bytes,
         diff_intervals=diff_intervals,
+        integrity_warnings=integrity_warnings if integrity_warnings else None,
+        integrity_verified=integrity_verified,
+        verify_failures=verify_failures if verify_failures else None,
     )
 
 

@@ -231,6 +231,23 @@ CREATE_FIRMWARE_SEGMENTS_FIRMWARE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_firmware_segments_firmware ON firmware_segments (firmware_id)
 """
 
+CREATE_FIRMWARE_SIGNATURES_TABLE = """
+CREATE TABLE IF NOT EXISTS firmware_signatures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    firmware_id INTEGER NOT NULL,
+    algorithm TEXT NOT NULL CHECK(algorithm IN ('hmac-sha256', 'ed25519')),
+    signature_hex TEXT NOT NULL CHECK(LENGTH(signature_hex) <= 256),
+    key_id TEXT NOT NULL CHECK(LENGTH(key_id) <= 64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(firmware_id),
+    FOREIGN KEY (firmware_id) REFERENCES firmwares (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_FIRMWARE_SIGNATURES_FIRMWARE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_firmware_signatures_firmware ON firmware_signatures (firmware_id)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -287,6 +304,8 @@ async def init_db():
         await db.execute(CREATE_FIRMWARES_NAME_INDEX)
         await db.execute(CREATE_FIRMWARE_SEGMENTS_TABLE)
         await db.execute(CREATE_FIRMWARE_SEGMENTS_FIRMWARE_INDEX)
+        await db.execute(CREATE_FIRMWARE_SIGNATURES_TABLE)
+        await db.execute(CREATE_FIRMWARE_SIGNATURES_FIRMWARE_INDEX)
         await db.commit()
     finally:
         await db.close()

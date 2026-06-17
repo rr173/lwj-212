@@ -1,5 +1,6 @@
 import json
 import hashlib
+import hmac
 from app.database import get_db
 from app.models import FieldDef
 from app.utils import validate_hex, hex_to_bytes, shannon_entropy, bytes_to_hex
@@ -315,6 +316,15 @@ def _generate_esp32_firmware_v20() -> bytes:
 
 
 DEMO_DEVICE_MODEL = "ESP32-DevKit"
+PRESET_SIGNING_KEY_HEX = "0123456789abcdef"
+PRESET_KEY_ID = "esp32-prod-key-2024"
+
+
+def _compute_hmac_sha256(data: bytes, key_hex: str) -> str:
+    key = bytes.fromhex(key_hex)
+    return hmac.new(key, data, hashlib.sha256).hexdigest()
+
+
 DEMO_FIRMWARE_SEGMENTS = [
     {"name": "bootloader", "start": 0, "end": 64, "type": "bootloader"},
     {"name": "kernel", "start": 64, "end": 160, "type": "kernel"},
@@ -336,6 +346,7 @@ async def _seed_firmware_demo(db):
         return
 
     firmware_ids = {}
+    firmware_data = {}
     for version, name, gen_fn in DEMO_FIRMWARE_VERSIONS:
         data = gen_fn()
         hex_data = bytes_to_hex(data)
@@ -352,6 +363,7 @@ async def _seed_firmware_demo(db):
         )
         firmware_id = cursor.lastrowid
         firmware_ids[version] = firmware_id
+        firmware_data[version] = data
 
         for seg in DEMO_FIRMWARE_SEGMENTS:
             await db.execute(
@@ -361,5 +373,17 @@ async def _seed_firmware_demo(db):
                 """,
                 (firmware_id, seg["name"], seg["start"], seg["end"], seg["type"]),
             )
+
+    for version in ["v1.0", "v1.1"]:
+        fid = firmware_ids[version]
+        data = firmware_data[version]
+        sig_hex = _compute_hmac_sha256(data, PRESET_SIGNING_KEY_HEX)
+        await db.execute(
+            """
+            INSERT INTO firmware_signatures (firmware_id, algorithm, signature_hex, key_id)
+            VALUES (?, 'hmac-sha256', ?, ?)
+            """,
+            (fid, sig_hex, PRESET_KEY_ID),
+        )
 
     await db.commit()

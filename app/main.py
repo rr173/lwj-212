@@ -14,8 +14,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Binary Protocol Parsing Workbench",
-    description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, and alert rule engine.",
-    version="1.6.0",
+    description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, alert rule engine, and firmware signature integrity verification chain.",
+    version="1.7.0",
     lifespan=lifespan,
 )
 
@@ -67,5 +67,10 @@ async def root():
             "Bootloader change detection with high-risk marking",
             "Batch version evolution analysis across all firmware versions",
             "Preloaded demo: ESP32-DevKit with 3 versions (v1.0/v1.1/v2.0)",
+            "Firmware signature management: bind signature records (hmac-sha256/ed25519) to firmware",
+            "Firmware integrity verification interface with detailed failure info",
+            "Diff analysis with pre-verification integrity check chain",
+            "Signature chain audit per device model with anomaly detection",
+            "Preloaded ESP32 demo: v1.0/v1.1 signed with hmac-sha256, v2.0 unsigned",
         ],
     }

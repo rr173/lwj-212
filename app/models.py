@@ -756,9 +756,39 @@ class SegmentOut(BaseModel):
     created_at: str
 
 
+class SignatureCreate(BaseModel):
+    algorithm: Literal["hmac-sha256", "ed25519"]
+    signature_hex: str = Field(..., max_length=256, description="签名值，hex字符串，最长256字符")
+    key_id: str = Field(..., max_length=64, description="签名密钥标识，最长64字符，不存实际密钥")
+
+
+class SignatureOut(BaseModel):
+    id: int
+    firmware_id: int
+    algorithm: Literal["hmac-sha256", "ed25519"]
+    signature_hex: str
+    key_id: str
+    created_at: str
+
+
+class VerifyRequest(BaseModel):
+    key_hex: str = Field(..., description="密钥hex字符串：hmac-sha256用密钥，ed25519用公钥")
+
+
+class VerifyResult(BaseModel):
+    firmware_id: int
+    status: Literal["passed", "failed", "no_signature"]
+    algorithm: str | None = None
+    key_id: str | None = None
+    expected_signature_hex: str | None = None
+    actual_signature_hex: str | None = None
+    error_message: str | None = None
+
+
 class DiffRequest(BaseModel):
     firmware_a_id: int
     firmware_b_id: int
+    key_hex: str | None = Field(default=None, description="可选：用于完整性校验的密钥hex字符串")
 
 
 class DiffInterval(BaseModel):
@@ -769,6 +799,16 @@ class DiffInterval(BaseModel):
     region_type: Literal["modified", "added", "removed"]
     segment_name: str | None
     segment_type: str | None
+
+
+class VerifyFailureDetail(BaseModel):
+    firmware_id: int
+    firmware_name: str
+    status: Literal["failed", "no_signature"]
+    algorithm: str | None = None
+    expected_signature_hex: str | None = None
+    actual_signature_hex: str | None = None
+    error_message: str | None = None
 
 
 class DiffReport(BaseModel):
@@ -788,6 +828,33 @@ class DiffReport(BaseModel):
     added_bytes: int
     removed_bytes: int
     diff_intervals: list[DiffInterval]
+    integrity_warnings: list[str] | None = None
+    integrity_verified: bool = False
+    verify_failures: list[VerifyFailureDetail] | None = None
+
+
+class FirmwareSignatureStatus(BaseModel):
+    firmware_id: int
+    firmware_name: str
+    version: str
+    has_signature: bool
+    algorithm: str | None = None
+    key_id: str | None = None
+    created_at: str | None = None
+
+
+class SignatureChainAuditResult(BaseModel):
+    device_model: str
+    total_firmwares: int
+    signed_count: int
+    unsigned_count: int
+    unique_key_ids: list[str]
+    key_id_consistent: bool
+    inconsistent_key_ids: list[str]
+    algorithm_consistent: bool
+    inconsistent_algorithms: list[str]
+    details: list[FirmwareSignatureStatus]
+    anomalies: list[str]
 
 
 class SegmentChangeSummary(BaseModel):
