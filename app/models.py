@@ -681,6 +681,8 @@ class ScanAlertsResult(BaseModel):
     template_id: int
     template_version: int
     total_samples: int
+    processed_samples: int
+    skipped_sample_ids: list[int]
     samples_with_alerts: int
     rule_trigger_ranking: list[dict]
     severity_stats: dict[str, int]

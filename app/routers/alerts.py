@@ -318,6 +318,7 @@ async def delete_alert_rule(rule_id: int):
 
 @router.post("/detect", response_model=DetectAlertsResult)
 async def detect_alerts(body: DetectAlertsRequest):
+    auto_recognized = body.template_id is None
     if body.template_id is not None:
         template_id = body.template_id
         fields, version = await _get_template_fields(template_id)
@@ -326,6 +327,20 @@ async def detect_alerts(body: DetectAlertsRequest):
 
     raw = await _get_sample_data(body.sample_id)
     parse_result = parse_message(raw, fields, template_id, body.sample_id, version)
+
+    if auto_recognized:
+        parse_errors = [f for f in parse_result.fields if f.status == "parse_error"]
+        if parse_errors:
+            error_fields = [f"'{f.name}'" for f in parse_errors]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"auto-recognized template (id={template_id}, version={version}) "
+                    f"failed to parse {len(parse_errors)} field(s): {', '.join(error_fields)}. "
+                    f"This may indicate a template version mismatch. "
+                    f"Please specify template_id and optionally template_version explicitly."
+                ),
+            )
 
     parsed_fields_dict = _parsed_fields_to_dict(parse_result)
     field_defs_dict = {f.name: f for f in fields}
@@ -392,13 +407,17 @@ async def scan_alerts(body: ScanAlertsRequest):
     rule_trigger_count: Counter = Counter()
     severity_count: Counter = Counter({"info": 0, "warning": 0, "critical": 0})
     critical_details: list[CriticalAlertDetail] = []
+    skipped_sample_ids: list[int] = []
+    processed_count = 0
 
     for sid in body.sample_ids:
         try:
             raw = await _get_sample_data(sid)
         except HTTPException:
+            skipped_sample_ids.append(sid)
             continue
 
+        processed_count += 1
         parse_result = parse_message(raw, fields, template_id, sid, version)
         parsed_fields_dict = _parsed_fields_to_dict(parse_result)
 
@@ -434,6 +453,8 @@ async def scan_alerts(body: ScanAlertsRequest):
         template_id=template_id,
         template_version=version,
         total_samples=len(body.sample_ids),
+        processed_samples=processed_count,
+        skipped_sample_ids=skipped_sample_ids,
         samples_with_alerts=samples_with_alerts,
         rule_trigger_ranking=ranking,
         severity_stats=dict(severity_count),
@@ -443,6 +464,7 @@ async def scan_alerts(body: ScanAlertsRequest):
 
 @router.post("/dry-run", response_model=DryRunResult)
 async def dry_run_rule(body: DryRunRequest):
+    auto_recognized = body.template_id is None
     if body.template_id is not None:
         template_id = body.template_id
         fields, version = await _get_template_fields(template_id)
@@ -455,6 +477,21 @@ async def dry_run_rule(body: DryRunRequest):
 
     raw = await _get_sample_data(body.sample_id)
     parse_result = parse_message(raw, fields, template_id, body.sample_id, version)
+
+    if auto_recognized:
+        parse_errors = [f for f in parse_result.fields if f.status == "parse_error"]
+        if parse_errors:
+            error_fields = [f"'{f.name}'" for f in parse_errors]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"auto-recognized template (id={template_id}, version={version}) "
+                    f"failed to parse {len(parse_errors)} field(s): {', '.join(error_fields)}. "
+                    f"This may indicate a template version mismatch. "
+                    f"Please specify template_id and optionally template_version explicitly."
+                ),
+            )
+
     parsed_fields_dict = _parsed_fields_to_dict(parse_result)
     field_defs_dict = {f.name: f for f in fields}
 
