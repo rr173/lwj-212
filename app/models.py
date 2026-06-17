@@ -707,3 +707,137 @@ class DryRunResult(BaseModel):
     triggered: bool
     field_values: dict[str, str | int | float | None]
     evaluations: list[ConditionEvaluation]
+
+
+# ============ Firmware Diff Analysis Models ============
+
+MAX_FIRMWARE_SIZE = 512 * 1024
+PADDING_THRESHOLD = 64
+
+
+class FirmwareCreate(BaseModel):
+    name: str
+    version: str
+    device_model: str | None = None
+    hex_data: str
+
+
+class FirmwareOut(BaseModel):
+    id: int
+    name: str
+    version: str
+    device_model: str | None
+    byte_length: int
+    sha256_hash: str
+    entropy: float
+    created_at: str
+
+
+class FirmwareDetailOut(FirmwareOut):
+    hex_data: str
+    segments: list["SegmentOut"]
+
+
+class SegmentCreate(BaseModel):
+    name: str
+    start_offset: int = Field(..., ge=0)
+    end_offset: int = Field(..., ge=1)
+    segment_type: Literal["bootloader", "kernel", "filesystem", "config", "padding"]
+
+
+class SegmentOut(BaseModel):
+    id: int
+    firmware_id: int
+    name: str
+    start_offset: int
+    end_offset: int
+    segment_type: str
+    length: int
+    created_at: str
+
+
+class DiffRequest(BaseModel):
+    firmware_a_id: int
+    firmware_b_id: int
+
+
+class DiffInterval(BaseModel):
+    start_offset: int
+    length: int
+    old_hex_preview: str | None
+    new_hex_preview: str | None
+    region_type: Literal["modified", "added", "removed"]
+    segment_name: str | None
+    segment_type: str | None
+
+
+class DiffReport(BaseModel):
+    firmware_a_id: int
+    firmware_b_id: int
+    firmware_a_name: str
+    firmware_b_name: str
+    firmware_a_version: str
+    firmware_b_version: str
+    device_model: str | None
+    total_bytes_a: int
+    total_bytes_b: int
+    same_bytes: int
+    same_percent: float
+    different_bytes: int
+    different_percent: float
+    added_bytes: int
+    removed_bytes: int
+    diff_intervals: list[DiffInterval]
+
+
+class SegmentChangeSummary(BaseModel):
+    segment_name: str
+    segment_type: str
+    start_offset: int
+    end_offset: int
+    total_length: int
+    changed_bytes: int
+    change_density: float
+
+
+class ChangeSummary(BaseModel):
+    firmware_a_id: int
+    firmware_b_id: int
+    firmware_a_version: str
+    firmware_b_version: str
+    overall_change_rate: float
+    segment_changes: list[SegmentChangeSummary]
+    has_bootloader_change: bool
+    has_config_change: bool
+    high_risk: bool
+
+
+class BatchCompareRequest(BaseModel):
+    device_model: str
+
+
+class VersionEvolutionEntry(BaseModel):
+    from_version: str
+    to_version: str
+    from_firmware_id: int
+    to_firmware_id: int
+    change_rate: float
+    changed_bytes: int
+    main_changed_segments: list[str]
+    has_bootloader_change: bool
+    high_risk: bool
+
+
+class BatchCompareResult(BaseModel):
+    device_model: str
+    version_count: int
+    versions: list[str]
+    evolution: list[VersionEvolutionEntry]
+
+
+class AutoPaddingResult(BaseModel):
+    firmware_id: int
+    detected_segments: list[SegmentOut]
+
+
+FirmwareDetailOut.model_rebuild()

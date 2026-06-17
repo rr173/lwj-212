@@ -191,6 +191,46 @@ CREATE_ALERT_RULES_TEMPLATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_alert_rules_template ON alert_rules (template_id)
 """
 
+CREATE_FIRMWARES_TABLE = """
+CREATE TABLE IF NOT EXISTS firmwares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    device_model TEXT,
+    hex_data TEXT NOT NULL,
+    byte_length INTEGER NOT NULL,
+    sha256_hash TEXT NOT NULL,
+    entropy REAL NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(device_model, version)
+)
+"""
+
+CREATE_FIRMWARES_DEVICE_MODEL_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_firmwares_device_model ON firmwares (device_model)
+"""
+
+CREATE_FIRMWARES_NAME_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_firmwares_name ON firmwares (name)
+"""
+
+CREATE_FIRMWARE_SEGMENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS firmware_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    firmware_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    segment_type TEXT NOT NULL CHECK(segment_type IN ('bootloader', 'kernel', 'filesystem', 'config', 'padding')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (firmware_id) REFERENCES firmwares (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_FIRMWARE_SEGMENTS_FIRMWARE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_firmware_segments_firmware ON firmware_segments (firmware_id)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -242,6 +282,11 @@ async def init_db():
         await db.execute(CREATE_FRAGMENTS_GROUP_INDEX)
         await db.execute(CREATE_ALERT_RULES_TABLE)
         await db.execute(CREATE_ALERT_RULES_TEMPLATE_INDEX)
+        await db.execute(CREATE_FIRMWARES_TABLE)
+        await db.execute(CREATE_FIRMWARES_DEVICE_MODEL_INDEX)
+        await db.execute(CREATE_FIRMWARES_NAME_INDEX)
+        await db.execute(CREATE_FIRMWARE_SEGMENTS_TABLE)
+        await db.execute(CREATE_FIRMWARE_SEGMENTS_FIRMWARE_INDEX)
         await db.commit()
     finally:
         await db.close()

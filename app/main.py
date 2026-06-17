@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware
 
 
 @asynccontextmanager
@@ -29,13 +29,14 @@ app.include_router(analysis.router)
 app.include_router(state_machines.router)
 app.include_router(fragments.router)
 app.include_router(alerts.router)
+app.include_router(firmware.router)
 
 
 @app.get("/")
 async def root():
     return {
         "service": "Binary Protocol Parsing Workbench",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "docs": "/docs",
         "features": [
             "Protocol template management with versioning",
@@ -57,5 +58,14 @@ async def root():
             "Cross-field & logical rule conditions (AND/OR/NOT)",
             "Single-sample alert detection & batch scan with severity ranking",
             "Rule dry-run test with per-condition evaluation trace",
+            "IoT Firmware diff analysis — upload firmware with hex string",
+            "Firmware metadata: auto-calc byte length, SHA256, Shannon entropy",
+            "Firmware segment annotation (bootloader/kernel/filesystem/config/padding)",
+            "Auto-detection of padding segments (64+ consecutive same bytes)",
+            "Byte-level firmware diff analysis with change intervals",
+            "Structured change summary with segment-level aggregation",
+            "Bootloader change detection with high-risk marking",
+            "Batch version evolution analysis across all firmware versions",
+            "Preloaded demo: ESP32-DevKit with 3 versions (v1.0/v1.1/v2.0)",
         ],
     }

@@ -1,7 +1,8 @@
 import json
+import hashlib
 from app.database import get_db
 from app.models import FieldDef
-from app.utils import validate_hex, hex_to_bytes, shannon_entropy
+from app.utils import validate_hex, hex_to_bytes, shannon_entropy, bytes_to_hex
 from app.parser import parse_message
 
 DEMO_TEMPLATE_NAME = "Demo: FEED Protocol"
@@ -271,5 +272,94 @@ async def seed_if_empty():
             )
 
         await db.commit()
+
+        await _seed_firmware_demo(db)
     finally:
         await db.close()
+
+
+def _sha256_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _generate_esp32_firmware_v10() -> bytes:
+    data = bytearray(256)
+    for i in range(64):
+        data[i] = 0xB0 + (i % 16)
+    for i in range(64, 160):
+        data[i] = 0x10 + ((i - 64) % 32)
+    for i in range(160, 208):
+        data[i] = 0xC0 + ((i - 160) % 16)
+    for i in range(208, 256):
+        data[i] = 0xFF
+    return bytes(data)
+
+
+def _generate_esp32_firmware_v11() -> bytes:
+    data = bytearray(_generate_esp32_firmware_v10())
+    data[165] = 0xAA
+    data[166] = 0xBB
+    data[170] = 0xCC
+    data[180] = 0xDD
+    data[190] = 0xEE
+    return bytes(data)
+
+
+def _generate_esp32_firmware_v20() -> bytes:
+    data = bytearray(_generate_esp32_firmware_v10())
+    for i in range(0, 64):
+        data[i] = 0xD0 + (i % 16)
+    for i in range(64, 160):
+        data[i] = 0x20 + ((i - 64) % 32)
+    return bytes(data)
+
+
+DEMO_DEVICE_MODEL = "ESP32-DevKit"
+DEMO_FIRMWARE_SEGMENTS = [
+    {"name": "bootloader", "start": 0, "end": 64, "type": "bootloader"},
+    {"name": "kernel", "start": 64, "end": 160, "type": "kernel"},
+    {"name": "config", "start": 160, "end": 208, "type": "config"},
+    {"name": "padding", "start": 208, "end": 256, "type": "padding"},
+]
+DEMO_FIRMWARE_VERSIONS = [
+    ("v1.0", "ESP32 Firmware v1.0", _generate_esp32_firmware_v10),
+    ("v1.1", "ESP32 Firmware v1.1", _generate_esp32_firmware_v11),
+    ("v2.0", "ESP32 Firmware v2.0", _generate_esp32_firmware_v20),
+]
+
+
+async def _seed_firmware_demo(db):
+    rows = await db.execute_fetchall(
+        "SELECT id FROM firmwares WHERE device_model = ?", (DEMO_DEVICE_MODEL,)
+    )
+    if rows:
+        return
+
+    firmware_ids = {}
+    for version, name, gen_fn in DEMO_FIRMWARE_VERSIONS:
+        data = gen_fn()
+        hex_data = bytes_to_hex(data)
+        byte_length = len(data)
+        sha256 = _sha256_hash(data)
+        entropy = shannon_entropy(data)
+
+        cursor = await db.execute(
+            """
+            INSERT INTO firmwares (name, version, device_model, hex_data, byte_length, sha256_hash, entropy)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, version, DEMO_DEVICE_MODEL, hex_data, byte_length, sha256, entropy),
+        )
+        firmware_id = cursor.lastrowid
+        firmware_ids[version] = firmware_id
+
+        for seg in DEMO_FIRMWARE_SEGMENTS:
+            await db.execute(
+                """
+                INSERT INTO firmware_segments (firmware_id, name, start_offset, end_offset, segment_type)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (firmware_id, seg["name"], seg["start"], seg["end"], seg["type"]),
+            )
+
+    await db.commit()
