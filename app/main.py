@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota
 
 
 @asynccontextmanager
@@ -31,6 +31,7 @@ app.include_router(fragments.router)
 app.include_router(alerts.router)
 app.include_router(firmware.router)
 app.include_router(segment_clustering.router)
+app.include_router(ota.router)
 
 
 @app.get("/")
@@ -76,5 +77,6 @@ async def root():
             "Entropy-based firmware segmentation: sliding window Shannon entropy with inflection point detection",
             "Byte frequency fingerprint matching: ARM/x86 code, UTF-8 text, zero-fill, random data pattern recognition",
             "Cross-firmware segment mapping: compare segment fingerprints across firmware versions, detect homologous segments",
+            "IoT OTA Upgrade Plan Management: device registration, upgrade plan creation, batch execution, failure threshold monitoring, rollback strategy",
         ],
     }

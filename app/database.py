@@ -248,6 +248,79 @@ CREATE_FIRMWARE_SIGNATURES_FIRMWARE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_firmware_signatures_firmware ON firmware_signatures (firmware_id)
 """
 
+CREATE_OTA_DEVICES_TABLE = """
+CREATE TABLE IF NOT EXISTS ota_devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_sn TEXT NOT NULL UNIQUE,
+    device_model TEXT NOT NULL,
+    firmware_version TEXT NOT NULL,
+    group_tag TEXT NOT NULL DEFAULT '',
+    online_status TEXT NOT NULL CHECK(online_status IN ('online', 'offline')) DEFAULT 'online',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_OTA_DEVICES_SN_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_ota_devices_sn ON ota_devices (device_sn)
+"""
+
+CREATE_OTA_DEVICES_MODEL_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_ota_devices_model ON ota_devices (device_model)
+"""
+
+CREATE_OTA_DEVICES_GROUP_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_ota_devices_group ON ota_devices (group_tag)
+"""
+
+CREATE_OTA_PLANS_TABLE = """
+CREATE TABLE IF NOT EXISTS ota_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    target_version TEXT NOT NULL,
+    device_model TEXT NOT NULL,
+    filter_group TEXT DEFAULT '',
+    filter_version_min TEXT DEFAULT '',
+    filter_version_max TEXT DEFAULT '',
+    strategy TEXT NOT NULL CHECK(strategy IN ('full', 'batch')),
+    batch_size INTEGER DEFAULT 0,
+    batch_interval INTEGER DEFAULT 0,
+    failure_threshold REAL NOT NULL,
+    rollback_version TEXT DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'paused', 'paused_failure_rate', 'completed')) DEFAULT 'pending',
+    current_batch INTEGER DEFAULT 0,
+    total_devices INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_OTA_PLAN_DEVICES_TABLE = """
+CREATE TABLE IF NOT EXISTS ota_plan_devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'upgrading', 'success', 'failed', 'skipped_offline', 'pending_rollback')) DEFAULT 'pending',
+    target_version TEXT NOT NULL,
+    failure_reason TEXT DEFAULT '',
+    batch_number INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES ota_plans (id) ON DELETE CASCADE,
+    FOREIGN KEY (device_id) REFERENCES ota_devices (id) ON DELETE CASCADE,
+    UNIQUE(plan_id, device_id)
+)
+"""
+
+CREATE_OTA_PLAN_DEVICES_PLAN_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_ota_plan_devices_plan ON ota_plan_devices (plan_id)
+"""
+
+CREATE_OTA_PLAN_DEVICES_DEVICE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_ota_plan_devices_device ON ota_plan_devices (device_id)
+"""
+
+CREATE_OTA_PLAN_DEVICES_STATUS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_ota_plan_devices_status ON ota_plan_devices (plan_id, status)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -306,6 +379,15 @@ async def init_db():
         await db.execute(CREATE_FIRMWARE_SEGMENTS_FIRMWARE_INDEX)
         await db.execute(CREATE_FIRMWARE_SIGNATURES_TABLE)
         await db.execute(CREATE_FIRMWARE_SIGNATURES_FIRMWARE_INDEX)
+        await db.execute(CREATE_OTA_DEVICES_TABLE)
+        await db.execute(CREATE_OTA_DEVICES_SN_INDEX)
+        await db.execute(CREATE_OTA_DEVICES_MODEL_INDEX)
+        await db.execute(CREATE_OTA_DEVICES_GROUP_INDEX)
+        await db.execute(CREATE_OTA_PLANS_TABLE)
+        await db.execute(CREATE_OTA_PLAN_DEVICES_TABLE)
+        await db.execute(CREATE_OTA_PLAN_DEVICES_PLAN_INDEX)
+        await db.execute(CREATE_OTA_PLAN_DEVICES_DEVICE_INDEX)
+        await db.execute(CREATE_OTA_PLAN_DEVICES_STATUS_INDEX)
         await db.commit()
     finally:
         await db.close()

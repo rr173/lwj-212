@@ -275,6 +275,7 @@ async def seed_if_empty():
         await db.commit()
 
         await _seed_firmware_demo(db)
+        await _seed_ota_demo(db)
     finally:
         await db.close()
 
@@ -384,6 +385,55 @@ async def _seed_firmware_demo(db):
             VALUES (?, 'hmac-sha256', ?, ?)
             """,
             (fid, sig_hex, PRESET_KEY_ID),
+        )
+
+    await db.commit()
+
+
+OTA_PRESET_DEVICES = [
+    {"device_sn": "ESP32-PROD-001", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-002", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-003", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-004", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-005", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-006", "device_model": "ESP32-DevKit", "firmware_version": "v1.1", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-007", "device_model": "ESP32-DevKit", "firmware_version": "v1.1", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-PROD-008", "device_model": "ESP32-DevKit", "firmware_version": "v1.1", "group_tag": "prod", "online_status": "online"},
+    {"device_sn": "ESP32-TEST-001", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "test", "online_status": "online"},
+    {"device_sn": "ESP32-TEST-002", "device_model": "ESP32-DevKit", "firmware_version": "v1.0", "group_tag": "test", "online_status": "offline"},
+]
+
+
+async def _seed_ota_demo(db):
+    existing = await db.execute_fetchall("SELECT id FROM ota_devices LIMIT 1")
+    if existing:
+        return
+
+    device_ids = []
+    for dev in OTA_PRESET_DEVICES:
+        cursor = await db.execute(
+            "INSERT INTO ota_devices (device_sn, device_model, firmware_version, group_tag, online_status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (dev["device_sn"], dev["device_model"], dev["firmware_version"],
+             dev["group_tag"], dev["online_status"]),
+        )
+        device_ids.append(cursor.lastrowid)
+
+    eligible_ids = device_ids[:5]
+
+    cursor = await db.execute(
+        "INSERT INTO ota_plans (name, target_version, device_model, filter_group, filter_version_min, "
+        "filter_version_max, strategy, batch_size, batch_interval, failure_threshold, rollback_version, "
+        "status, total_devices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("ESP32-DevKit v2.0 Upgrade", "v2.0", "ESP32-DevKit", "prod", "v1.0", "v1.0",
+         "batch", 2, 5, 0.5, "v1.0", "pending", len(eligible_ids)),
+    )
+    plan_id = cursor.lastrowid
+
+    for did in eligible_ids:
+        await db.execute(
+            "INSERT INTO ota_plan_devices (plan_id, device_id, target_version) VALUES (?, ?, ?)",
+            (plan_id, did, "v2.0"),
         )
 
     await db.commit()
