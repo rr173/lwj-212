@@ -65,14 +65,45 @@ def _sliding_window_entropy(data: bytes, window_size: int) -> list[float]:
     return entropies
 
 
-def _find_inflection_points(entropies: list[float], threshold: float) -> list[int]:
-    if len(entropies) < 2:
+def _find_inflection_points(
+    entropies: list[float],
+    window_size: int,
+    data_length: int,
+    threshold: float,
+) -> list[int]:
+    if len(entropies) < 3:
         return []
+
+    n = len(entropies)
+    half_window = max(3, window_size // 4)
+
     points = []
-    for i in range(1, len(entropies)):
-        diff = abs(entropies[i] - entropies[i - 1])
+    i = half_window
+    while i < n - half_window:
+        left_avg = sum(entropies[i - half_window:i]) / half_window
+        right_avg = sum(entropies[i:i + half_window]) / half_window
+        diff = abs(right_avg - left_avg)
+
         if diff > threshold:
             points.append(i)
+            i += half_window
+        else:
+            i += 1
+
+    if not points:
+        i = 1
+        while i < n - 1:
+            left_len = min(i, 10)
+            right_len = min(n - i, 10)
+            left_avg = sum(entropies[i - left_len:i]) / left_len
+            right_avg = sum(entropies[i:i + right_len]) / right_len
+            diff = abs(right_avg - left_avg)
+            if diff > 0.8:
+                points.append(i)
+                i += 10
+            else:
+                i += 1
+
     return points
 
 
@@ -102,15 +133,38 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot_product / (norm_a * norm_b)
 
 
-def _match_byte_fingerprint(freq: list[float]) -> tuple[str, int]:
-    best_pattern = "unknown"
-    best_sim = 0.0
+def _match_byte_fingerprint(freq: list[float], data_length: int) -> tuple[str, int]:
+    zero_ratio = freq[0]
+    printable_ascii_ratio = sum(freq[b] for b in range(0x20, 0x7F))
+
+    rule_based = None
+    rule_confidence = 0
+
+    if zero_ratio > 0.9:
+        rule_based = "zero_fill"
+        rule_confidence = min(100, int(zero_ratio * 100))
+    elif printable_ascii_ratio > 0.8:
+        rule_based = "utf8_text"
+        rule_confidence = min(100, int(printable_ascii_ratio * 100))
+
+    sim_results = {}
     for pattern_name, pattern_counter in BUILTIN_PATTERNS.items():
         pattern_freq = [pattern_counter.get(b, 0) for b in range(256)]
         sim = _cosine_similarity(freq, pattern_freq)
+        sim_results[pattern_name] = sim
+
+    if rule_based:
+        rule_sim = sim_results.get(rule_based, 0)
+        combined_confidence = max(rule_confidence, int(rule_sim * 100))
+        return rule_based, min(100, combined_confidence)
+
+    best_pattern = "unknown"
+    best_sim = 0.0
+    for pattern_name, sim in sim_results.items():
         if sim > best_sim:
             best_sim = sim
             best_pattern = pattern_name
+
     confidence = min(100, max(0, int(round(best_sim * 100))))
     return best_pattern, confidence
 
@@ -154,7 +208,7 @@ async def entropy_segmentation(
             segments=[],
         )
 
-    inflection_indices = _find_inflection_points(entropies, ENTROPY_INFLECTION_THRESHOLD)
+    inflection_indices = _find_inflection_points(entropies, window_size, total_bytes, ENTROPY_INFLECTION_THRESHOLD)
 
     boundaries = [0]
     for idx in inflection_indices:
@@ -221,7 +275,7 @@ async def byte_fingerprint_analysis(
         window_size = min(window_size, total_bytes) if total_bytes > 0 else window_size
         entropies = _sliding_window_entropy(data, window_size) if total_bytes > 0 else []
         if entropies:
-            inflection_indices = _find_inflection_points(entropies, ENTROPY_INFLECTION_THRESHOLD)
+            inflection_indices = _find_inflection_points(entropies, window_size, total_bytes, ENTROPY_INFLECTION_THRESHOLD)
             boundaries = [0]
             for idx in inflection_indices:
                 boundary = idx + window_size // 2
@@ -259,7 +313,7 @@ async def byte_fingerprint_analysis(
             )
             continue
         freq = _compute_byte_frequency(seg_data)
-        best_match, confidence = _match_byte_fingerprint(freq)
+        best_match, confidence = _match_byte_fingerprint(freq, len(seg_data))
         fingerprints.append(
             SegmentFingerprint(
                 segment_name=seg_name,
