@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering
 
 
 @asynccontextmanager
@@ -15,7 +15,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Binary Protocol Parsing Workbench",
     description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, alert rule engine, and firmware signature integrity verification chain.",
-    version="1.7.0",
+    version="1.8.0",
     lifespan=lifespan,
 )
 
@@ -30,13 +30,14 @@ app.include_router(state_machines.router)
 app.include_router(fragments.router)
 app.include_router(alerts.router)
 app.include_router(firmware.router)
+app.include_router(segment_clustering.router)
 
 
 @app.get("/")
 async def root():
     return {
         "service": "Binary Protocol Parsing Workbench",
-        "version": "1.7.0",
+        "version": "1.8.0",
         "docs": "/docs",
         "features": [
             "Protocol template management with versioning",
@@ -72,5 +73,8 @@ async def root():
             "Diff analysis with pre-verification integrity check chain",
             "Signature chain audit per device model with anomaly detection",
             "Preloaded ESP32 demo: v1.0/v1.1 signed with hmac-sha256, v2.0 unsigned",
+            "Entropy-based firmware segmentation: sliding window Shannon entropy with inflection point detection",
+            "Byte frequency fingerprint matching: ARM/x86 code, UTF-8 text, zero-fill, random data pattern recognition",
+            "Cross-firmware segment mapping: compare segment fingerprints across firmware versions, detect homologous segments",
         ],
     }

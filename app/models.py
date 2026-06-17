@@ -907,4 +907,70 @@ class AutoPaddingResult(BaseModel):
     detected_segments: list[SegmentOut]
 
 
+# ============ Segment Clustering Models ============
+
+ENTROPY_WINDOW_MIN = 8
+ENTROPY_WINDOW_MAX = 256
+ENTROPY_WINDOW_DEFAULT = 32
+ENTROPY_INFLECTION_THRESHOLD = 1.5
+HOMOLOGOUS_SIMILARITY_THRESHOLD = 85.0
+
+
+class EntropySegmentRequest(BaseModel):
+    window_size: int = Field(default=32, ge=8, le=256, description="sliding window size in bytes (8-256, default 32)")
+
+
+class EntropySegment(BaseModel):
+    start_offset: int
+    end_offset: int
+    avg_entropy: float
+    label: str
+
+
+class EntropySegmentResult(BaseModel):
+    firmware_id: int
+    window_size: int
+    total_bytes: int
+    segment_count: int
+    segments: list[EntropySegment]
+
+
+class ByteFingerprintRequest(BaseModel):
+    pass
+
+
+class SegmentFingerprint(BaseModel):
+    segment_name: str
+    start_offset: int
+    end_offset: int
+    best_match: str
+    confidence: int
+
+
+class ByteFingerprintResult(BaseModel):
+    firmware_id: int
+    segment_count: int
+    fingerprints: list[SegmentFingerprint]
+
+
+class CrossFirmwareMapRequest(BaseModel):
+    firmware_a_id: int
+    firmware_b_id: int
+
+
+class SegmentMapping(BaseModel):
+    segment_a_name: str
+    segment_b_name: str
+    similarity_percent: float
+    is_homologous: bool
+
+
+class CrossFirmwareMapResult(BaseModel):
+    firmware_a_id: int
+    firmware_b_id: int
+    device_model: str
+    total_pairs: int
+    mappings: list[SegmentMapping]
+
+
 FirmwareDetailOut.model_rebuild()
