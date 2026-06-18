@@ -974,3 +974,121 @@ class CrossFirmwareMapResult(BaseModel):
 
 
 FirmwareDetailOut.model_rebuild()
+
+
+# ============ IoT Device Alert Engine Models ============
+
+ALERT_TYPES = ("sensor_error", "comm_timeout", "firmware_checksum_fail", "memory_overflow", "reboot_loop")
+ALERT_SEVERITIES = ("low", "medium", "high", "critical")
+SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+THIRTY_DAYS_SECONDS = 30 * 24 * 3600
+MAX_WINDOW_SECONDS = 7 * 24 * 3600
+MAX_BATCH_ALERTS = 50
+
+
+class IoTDeviceOut(BaseModel):
+    id: int
+    device_sn: str
+    device_model: str
+    firmware_version: str
+    online_status: Literal["online", "offline"]
+    created_at: str
+
+
+class IoTAlertCreate(BaseModel):
+    device_sn: str
+    alert_type: Literal["sensor_error", "comm_timeout", "firmware_checksum_fail", "memory_overflow", "reboot_loop"]
+    severity: Literal["low", "medium", "high", "critical"]
+    timestamp: int = Field(..., ge=0, description="Unix timestamp in seconds")
+    extra_info: str = ""
+
+
+class IoTAlertBatchCreate(BaseModel):
+    alerts: list[IoTAlertCreate] = Field(..., min_length=1, max_length=50)
+
+
+class IoTAlertOut(BaseModel):
+    id: int
+    device_sn: str
+    device_model: str | None = None
+    alert_type: str
+    severity: str
+    timestamp: int
+    extra_info: str
+    created_at: str
+
+
+class AlertBatchSubmitResult(BaseModel):
+    submitted: int
+    deduplicated: int
+    rejected: int
+    errors: list[str]
+
+
+class AlertAggregationEntry(BaseModel):
+    alert_type: str
+    count: int
+    device_count: int
+    max_severity: str
+    first_seen: int
+    last_seen: int
+
+
+class AlertAggregationResult(BaseModel):
+    window_start: int
+    window_end: int
+    device_model_filter: str | None
+    total_alerts: int
+    aggregations: list[AlertAggregationEntry]
+
+
+class PatternMatchSpike(BaseModel):
+    pattern_type: Literal["spike"]
+    alert_type: str
+    last_hour_count: int
+    prev_24h_avg: float
+    ratio: float
+    threshold: float = 5.0
+
+
+class PatternMatchSpread(BaseModel):
+    pattern_type: Literal["spread"]
+    alert_type: str
+    device_model: str
+    affected_devices: int
+    total_devices: int
+    ratio: float
+    threshold: float = 0.3
+    affected_device_sns: list[str]
+
+
+class PatternMatchCorrelation(BaseModel):
+    pattern_type: Literal["correlation"]
+    device_sn: str
+    device_model: str
+    window_minutes: int = 10
+    alert_types: list[str]
+    threshold_types: int = 2
+
+
+PatternMatch = PatternMatchSpike | PatternMatchSpread | PatternMatchCorrelation
+
+
+class PatternAnalysisResult(BaseModel):
+    window_start: int
+    window_end: int
+    matches: list[PatternMatch]
+
+
+class UpgradeRecommendation(BaseModel):
+    recommendation_type: Literal["emergency_firmware_upgrade", "upgrade_after_investigation", "monitor_only"]
+    priority: Literal["high", "medium", "low"]
+    reason: str
+    device_sns: list[str]
+    triggered_patterns: list[str]
+
+
+class UpgradeDecisionResult(BaseModel):
+    window_start: int
+    window_end: int
+    recommendations: list[UpgradeRecommendation]

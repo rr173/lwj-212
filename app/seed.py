@@ -1,6 +1,7 @@
 import json
 import hashlib
 import hmac
+import time
 from app.database import get_db
 from app.models import FieldDef
 from app.utils import validate_hex, hex_to_bytes, shannon_entropy, bytes_to_hex
@@ -276,6 +277,7 @@ async def seed_if_empty():
 
         await _seed_firmware_demo(db)
         await _seed_ota_demo(db)
+        await _seed_iot_device_alerts_demo(db)
     finally:
         await db.close()
 
@@ -435,5 +437,159 @@ async def _seed_ota_demo(db):
             "INSERT INTO ota_plan_devices (plan_id, device_id, target_version) VALUES (?, ?, ?)",
             (plan_id, did, "v2.0"),
         )
+
+    await db.commit()
+
+
+IOT_V1_MODEL = "ESP32-DevKit v1.0"
+IOT_V2_MODEL = "ESP32-DevKit v2.0"
+
+
+def _generate_iot_devices():
+    devices = []
+    for i in range(1, 11):
+        devices.append({
+            "device_sn": f"IOT-V1-{i:03d}",
+            "device_model": IOT_V1_MODEL,
+            "firmware_version": "v1.0",
+            "online_status": "online",
+        })
+    for i in range(1, 11):
+        devices.append({
+            "device_sn": f"IOT-V2-{i:03d}",
+            "device_model": IOT_V2_MODEL,
+            "firmware_version": "v2.0",
+            "online_status": "online",
+        })
+    return devices
+
+
+def _generate_iot_alerts(now_ts: int):
+    alerts = []
+    two_hours_ago = now_ts - 2 * 3600
+    thirty_min_ago = now_ts - 30 * 60
+
+    v1_devices = [f"IOT-V1-{i:03d}" for i in range(1, 11)]
+    v2_devices = [f"IOT-V2-{i:03d}" for i in range(1, 11)]
+
+    # 3 devices have sensor_error + comm_timeout + memory_overflow within 10 minutes window -> correlation pattern
+    corr_devices = v1_devices[6:9]
+    corr_base_ts = two_hours_ago + 30 * 60
+    for dev in corr_devices:
+        alerts.append({
+            "device_sn": dev,
+            "alert_type": "sensor_error",
+            "severity": "medium",
+            "timestamp": corr_base_ts,
+            "extra_info": "temperature sensor out of range",
+        })
+        alerts.append({
+            "device_sn": dev,
+            "alert_type": "comm_timeout",
+            "severity": "medium",
+            "timestamp": corr_base_ts + 60,
+            "extra_info": "MQTT broker timeout 5s",
+        })
+        alerts.append({
+            "device_sn": dev,
+            "alert_type": "memory_overflow",
+            "severity": "low",
+            "timestamp": corr_base_ts + 120,
+            "extra_info": "heap usage 92%",
+        })
+
+    # 6 v1.0 devices report firmware_checksum_fail concentrated in last 30 min -> spread pattern (6/10=60% > 30%)
+    spread_devices = v1_devices[:6]
+    for dev_idx, dev in enumerate(spread_devices):
+        for report_i in range(4):
+            ts = thirty_min_ago + dev_idx * 30 + report_i * 60
+            alerts.append({
+                "device_sn": dev,
+                "alert_type": "firmware_checksum_fail",
+                "severity": "high",
+                "timestamp": ts,
+                "extra_info": f"CRC mismatch at sector {0x1000 + report_i * 0x1000:x}",
+            })
+
+    # Scattered alerts in 2-hour window to fill up to ~50
+    # Some random memory_overflow on v2 devices
+    v2_memory_devs = v2_devices[:3]
+    for dev_idx, dev in enumerate(v2_memory_devs):
+        for report_i in range(2):
+            ts = two_hours_ago + dev_idx * 200 + report_i * 1800
+            alerts.append({
+                "device_sn": dev,
+                "alert_type": "memory_overflow",
+                "severity": "low",
+                "timestamp": ts,
+                "extra_info": f"heap {80 + report_i * 5}%",
+            })
+
+    # Some random sensor_error
+    v1_sensor_devs = v1_devices[9:] + v2_devices[5:8]
+    for dev_idx, dev in enumerate(v1_sensor_devs):
+        for report_i in range(2):
+            ts = two_hours_ago + 300 + dev_idx * 350 + report_i * 2400
+            alerts.append({
+                "device_sn": dev,
+                "alert_type": "sensor_error",
+                "severity": "low",
+                "timestamp": ts,
+                "extra_info": "ADC noise spike",
+            })
+
+    # A few comm_timeout
+    v_comm_devs = v2_devices[8:] + v1_devices[:1]
+    for dev_idx, dev in enumerate(v_comm_devs):
+        for report_i in range(2):
+            ts = two_hours_ago + 15 * 60 + dev_idx * 400 + report_i * 3000
+            alerts.append({
+                "device_sn": dev,
+                "alert_type": "comm_timeout",
+                "severity": "medium",
+                "timestamp": ts,
+                "extra_info": "packet loss > 10%",
+            })
+
+    alerts.sort(key=lambda a: a["timestamp"])
+    if len(alerts) > 50:
+        alerts = alerts[:50]
+    return alerts
+
+
+async def _seed_iot_device_alerts_demo(db):
+    existing_devs = await db.execute_fetchall("SELECT id FROM iot_devices LIMIT 1")
+    if existing_devs:
+        return
+
+    now_ts = int(time.time())
+    iot_devices = _generate_iot_devices()
+    for dev in iot_devices:
+        await db.execute(
+            "INSERT INTO iot_devices (device_sn, device_model, firmware_version, online_status) "
+            "VALUES (?, ?, ?, ?)",
+            (dev["device_sn"], dev["device_model"], dev["firmware_version"], dev["online_status"]),
+        )
+
+    iot_alerts = _generate_iot_alerts(now_ts)
+    for alert in iot_alerts:
+        dedup_key = f"{alert['device_sn']}|{alert['alert_type']}|{alert['timestamp']}"
+        try:
+            await db.execute(
+                """
+                INSERT INTO iot_alerts (device_sn, alert_type, severity, timestamp, extra_info, dedup_key)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    alert["device_sn"],
+                    alert["alert_type"],
+                    alert["severity"],
+                    alert["timestamp"],
+                    alert["extra_info"],
+                    dedup_key,
+                ),
+            )
+        except Exception:
+            pass
 
     await db.commit()

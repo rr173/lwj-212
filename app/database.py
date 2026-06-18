@@ -321,6 +321,55 @@ CREATE_OTA_PLAN_DEVICES_STATUS_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_ota_plan_devices_status ON ota_plan_devices (plan_id, status)
 """
 
+CREATE_IOT_DEVICES_TABLE = """
+CREATE TABLE IF NOT EXISTS iot_devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_sn TEXT NOT NULL UNIQUE,
+    device_model TEXT NOT NULL,
+    firmware_version TEXT NOT NULL DEFAULT '',
+    online_status TEXT NOT NULL CHECK(online_status IN ('online', 'offline')) DEFAULT 'online',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_IOT_DEVICES_SN_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_iot_devices_sn ON iot_devices (device_sn)
+"""
+
+CREATE_IOT_DEVICES_MODEL_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_iot_devices_model ON iot_devices (device_model)
+"""
+
+CREATE_IOT_ALERTS_TABLE = """
+CREATE TABLE IF NOT EXISTS iot_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_sn TEXT NOT NULL,
+    alert_type TEXT NOT NULL CHECK(alert_type IN ('sensor_error', 'comm_timeout', 'firmware_checksum_fail', 'memory_overflow', 'reboot_loop')),
+    severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+    timestamp INTEGER NOT NULL,
+    extra_info TEXT DEFAULT '',
+    dedup_key TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(dedup_key)
+)
+"""
+
+CREATE_IOT_ALERTS_DEVICE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_iot_alerts_device ON iot_alerts (device_sn)
+"""
+
+CREATE_IOT_ALERTS_TYPE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_iot_alerts_type ON iot_alerts (alert_type)
+"""
+
+CREATE_IOT_ALERTS_SEVERITY_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_iot_alerts_severity ON iot_alerts (severity)
+"""
+
+CREATE_IOT_ALERTS_TS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_iot_alerts_ts ON iot_alerts (timestamp)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -388,6 +437,14 @@ async def init_db():
         await db.execute(CREATE_OTA_PLAN_DEVICES_PLAN_INDEX)
         await db.execute(CREATE_OTA_PLAN_DEVICES_DEVICE_INDEX)
         await db.execute(CREATE_OTA_PLAN_DEVICES_STATUS_INDEX)
+        await db.execute(CREATE_IOT_DEVICES_TABLE)
+        await db.execute(CREATE_IOT_DEVICES_SN_INDEX)
+        await db.execute(CREATE_IOT_DEVICES_MODEL_INDEX)
+        await db.execute(CREATE_IOT_ALERTS_TABLE)
+        await db.execute(CREATE_IOT_ALERTS_DEVICE_INDEX)
+        await db.execute(CREATE_IOT_ALERTS_TYPE_INDEX)
+        await db.execute(CREATE_IOT_ALERTS_SEVERITY_INDEX)
+        await db.execute(CREATE_IOT_ALERTS_TS_INDEX)
         await db.commit()
     finally:
         await db.close()
