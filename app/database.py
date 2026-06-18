@@ -370,6 +370,95 @@ CREATE_IOT_ALERTS_TS_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_iot_alerts_ts ON iot_alerts (timestamp)
 """
 
+CREATE_CFG_TEMPLATES_TABLE = """
+CREATE TABLE IF NOT EXISTS cfg_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    device_model TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_CFG_TEMPLATES_MODEL_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_templates_model ON cfg_templates (device_model)
+"""
+
+CREATE_CFG_TEMPLATE_ITEMS_TABLE = """
+CREATE TABLE IF NOT EXISTS cfg_template_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    key_name TEXT NOT NULL,
+    value_type TEXT NOT NULL CHECK(value_type IN ('int', 'float', 'string', 'bool')),
+    default_value TEXT NOT NULL,
+    constraint_min REAL,
+    constraint_max REAL,
+    constraint_max_length INTEGER,
+    FOREIGN KEY (template_id) REFERENCES cfg_templates (id) ON DELETE CASCADE,
+    UNIQUE(template_id, key_name)
+)
+"""
+
+CREATE_CFG_TEMPLATE_ITEMS_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_template_items_template ON cfg_template_items (template_id)
+"""
+
+CREATE_CFG_DEVICES_TABLE = """
+CREATE TABLE IF NOT EXISTS cfg_devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_sn TEXT NOT NULL UNIQUE,
+    template_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES cfg_templates (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_CFG_DEVICES_SN_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_devices_sn ON cfg_devices (device_sn)
+"""
+
+CREATE_CFG_DEVICES_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_devices_template ON cfg_devices (template_id)
+"""
+
+CREATE_CFG_DEVICE_VALUES_TABLE = """
+CREATE TABLE IF NOT EXISTS cfg_device_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(device_id, item_id),
+    FOREIGN KEY (device_id) REFERENCES cfg_devices (id) ON DELETE CASCADE,
+    FOREIGN KEY (item_id) REFERENCES cfg_template_items (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_CFG_DEVICE_VALUES_DEVICE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_device_values_device ON cfg_device_values (device_id)
+"""
+
+CREATE_CFG_CHANGE_HISTORY_TABLE = """
+CREATE TABLE IF NOT EXISTS cfg_change_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    old_value TEXT NOT NULL,
+    new_value TEXT NOT NULL,
+    changed_by TEXT NOT NULL DEFAULT '',
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (device_id) REFERENCES cfg_devices (id) ON DELETE CASCADE,
+    FOREIGN KEY (item_id) REFERENCES cfg_template_items (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_CFG_CHANGE_HISTORY_DEVICE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_change_history_device ON cfg_change_history (device_id)
+"""
+
+CREATE_CFG_CHANGE_HISTORY_CHANGED_AT_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_cfg_change_history_changed_at ON cfg_change_history (changed_at)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -445,6 +534,18 @@ async def init_db():
         await db.execute(CREATE_IOT_ALERTS_TYPE_INDEX)
         await db.execute(CREATE_IOT_ALERTS_SEVERITY_INDEX)
         await db.execute(CREATE_IOT_ALERTS_TS_INDEX)
+        await db.execute(CREATE_CFG_TEMPLATES_TABLE)
+        await db.execute(CREATE_CFG_TEMPLATES_MODEL_INDEX)
+        await db.execute(CREATE_CFG_TEMPLATE_ITEMS_TABLE)
+        await db.execute(CREATE_CFG_TEMPLATE_ITEMS_TEMPLATE_INDEX)
+        await db.execute(CREATE_CFG_DEVICES_TABLE)
+        await db.execute(CREATE_CFG_DEVICES_SN_INDEX)
+        await db.execute(CREATE_CFG_DEVICES_TEMPLATE_INDEX)
+        await db.execute(CREATE_CFG_DEVICE_VALUES_TABLE)
+        await db.execute(CREATE_CFG_DEVICE_VALUES_DEVICE_INDEX)
+        await db.execute(CREATE_CFG_CHANGE_HISTORY_TABLE)
+        await db.execute(CREATE_CFG_CHANGE_HISTORY_DEVICE_INDEX)
+        await db.execute(CREATE_CFG_CHANGE_HISTORY_CHANGED_AT_INDEX)
         await db.commit()
     finally:
         await db.close()

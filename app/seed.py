@@ -278,6 +278,7 @@ async def seed_if_empty():
         await _seed_firmware_demo(db)
         await _seed_ota_demo(db)
         await _seed_iot_device_alerts_demo(db)
+        await _seed_config_template_demo(db)
     finally:
         await db.close()
 
@@ -591,5 +592,65 @@ async def _seed_iot_device_alerts_demo(db):
             )
         except Exception:
             pass
+
+    await db.commit()
+
+
+CFG_DEMO_TEMPLATE_NAME = "ESP32-DevKit"
+CFG_DEMO_DEVICE_MODEL = "ESP32-DevKit"
+
+CFG_DEMO_ITEMS = [
+    {"key_name": "sample_rate", "value_type": "int", "default_value": "10", "constraint_min": 1, "constraint_max": 1000, "constraint_max_length": None},
+    {"key_name": "report_interval", "value_type": "int", "default_value": "60", "constraint_min": 5, "constraint_max": 3600, "constraint_max_length": None},
+    {"key_name": "temp_threshold", "value_type": "float", "default_value": "35.5", "constraint_min": -40, "constraint_max": 85, "constraint_max_length": None},
+    {"key_name": "device_name", "value_type": "string", "default_value": "ESP32-Device", "constraint_min": None, "constraint_max": None, "constraint_max_length": 32},
+    {"key_name": "debug_mode", "value_type": "bool", "default_value": "false", "constraint_min": None, "constraint_max": None, "constraint_max_length": None},
+]
+
+CFG_DEMO_DEVICES = [
+    {"device_sn": "ESP32-CFG-001", "overrides": {}},
+    {"device_sn": "ESP32-CFG-002", "overrides": {}},
+    {"device_sn": "ESP32-CFG-003", "overrides": {"sample_rate": "20"}},
+    {"device_sn": "ESP32-CFG-004", "overrides": {"sample_rate": "20"}},
+    {"device_sn": "ESP32-CFG-005", "overrides": {}},
+]
+
+
+async def _seed_config_template_demo(db):
+    existing = await db.execute_fetchall(
+        "SELECT id FROM cfg_templates WHERE name = ?", (CFG_DEMO_TEMPLATE_NAME,)
+    )
+    if existing:
+        return
+
+    cursor = await db.execute(
+        "INSERT INTO cfg_templates (name, device_model) VALUES (?, ?)",
+        (CFG_DEMO_TEMPLATE_NAME, CFG_DEMO_DEVICE_MODEL),
+    )
+    template_id = cursor.lastrowid
+
+    item_ids = {}
+    for item in CFG_DEMO_ITEMS:
+        cursor = await db.execute(
+            "INSERT INTO cfg_template_items (template_id, key_name, value_type, default_value, constraint_min, constraint_max, constraint_max_length) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (template_id, item["key_name"], item["value_type"], item["default_value"],
+             item["constraint_min"], item["constraint_max"], item["constraint_max_length"]),
+        )
+        item_ids[item["key_name"]] = cursor.lastrowid
+
+    for dev in CFG_DEMO_DEVICES:
+        cursor = await db.execute(
+            "INSERT INTO cfg_devices (device_sn, template_id) VALUES (?, ?)",
+            (dev["device_sn"], template_id),
+        )
+        device_id = cursor.lastrowid
+
+        for item in CFG_DEMO_ITEMS:
+            value = dev["overrides"].get(item["key_name"], item["default_value"])
+            await db.execute(
+                "INSERT INTO cfg_device_values (device_id, item_id, value) VALUES (?, ?, ?)",
+                (device_id, item_ids[item["key_name"]], value),
+            )
 
     await db.commit()

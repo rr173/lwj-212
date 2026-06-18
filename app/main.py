@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare
 
 
 @asynccontextmanager
@@ -14,8 +14,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Binary Protocol Parsing Workbench",
-    description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, alert rule engine, firmware signature integrity verification chain, and IoT device alert aggregation & upgrade decision engine.",
-    version="1.9.0",
+    description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, alert rule engine, firmware signature integrity verification chain, IoT device alert aggregation & upgrade decision engine, and device configuration template & batch deployment service.",
+    version="1.10.0",
     lifespan=lifespan,
 )
 
@@ -33,13 +33,17 @@ app.include_router(firmware.router)
 app.include_router(segment_clustering.router)
 app.include_router(ota.router)
 app.include_router(device_alerts.router)
+app.include_router(config_templates.router)
+app.include_router(device_config.router)
+app.include_router(batch_push.router)
+app.include_router(config_compare.router)
 
 
 @app.get("/")
 async def root():
     return {
         "service": "Binary Protocol Parsing Workbench",
-        "version": "1.9.0",
+        "version": "1.10.0",
         "docs": "/docs",
         "features": [
             "Protocol template management with versioning",
@@ -85,5 +89,12 @@ async def root():
             "Pattern detection: spike (5x avg), spread (30% device model), correlation (2+ types in 10min)",
             "Upgrade recommendation: emergency firmware upgrade, post-investigation upgrade, monitor only",
             "Preloaded 20 IoT devices (10x ESP32 v1.0 + 10x v2.0) and 50 demo alerts with pre-built patterns",
+            "Device Configuration Template Management: create templates bound to device models with typed config items and constraints",
+            "Config item validation: int/float/string/bool types with range/length constraints, default value validation on creation",
+            "Device config instances: auto-initialized from template defaults, per-item modification with validation",
+            "Config change history: full audit trail (who/when/what from/to) with per-device query",
+            "Batch deployment: push config changes to all devices using a template, pre-check all-or-nothing",
+            "Config comparison: device-vs-device diff and device-vs-template deviation analysis",
+            "Preloaded ESP32-DevKit config template with 5 items and 5 bound devices (2 with modified sample_rate)",
         ],
     }
