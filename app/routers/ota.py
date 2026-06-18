@@ -54,6 +54,9 @@ async def _push_batch(plan_id: int):
                 return
             plan = plan_row[0]
 
+            if plan["status"] != "running":
+                return
+
             if plan["strategy"] == "full":
                 pending_devices = await db.execute_fetchall(
                     "SELECT pd.id, pd.device_id, d.online_status FROM ota_plan_devices pd "
@@ -63,7 +66,8 @@ async def _push_batch(plan_id: int):
                 )
                 batch_num = 1
                 for pd in pending_devices:
-                    if pd["online_status"] == "offline":
+                    online_status = str(pd["online_status"] or "").strip().lower()
+                    if online_status == "offline":
                         await db.execute(
                             "UPDATE ota_plan_devices SET status = 'skipped_offline', batch_number = ? WHERE id = ?",
                             (batch_num, pd["id"]),
@@ -80,7 +84,8 @@ async def _push_batch(plan_id: int):
 
                 await _check_plan_completion(plan_id)
             else:
-                await _push_next_batch(plan_id)
+                task = asyncio.create_task(_push_next_batch(plan_id))
+                _background_tasks[plan_id] = task
         finally:
             await db.close()
     except Exception as e:
@@ -98,8 +103,14 @@ async def _push_next_batch(plan_id: int):
                 return
             plan = plan_row[0]
 
-            if plan["status"] not in ("running",):
+            if plan["status"] != "running":
                 return
+
+            batch_size = int(plan["batch_size"]) if plan["batch_size"] else 1
+            if batch_size < 1:
+                batch_size = 1
+            if batch_size > 100:
+                batch_size = 100
 
             pending_devices = await db.execute_fetchall(
                 "SELECT pd.id, pd.device_id, d.online_status FROM ota_plan_devices pd "
@@ -107,17 +118,18 @@ async def _push_next_batch(plan_id: int):
                 "WHERE pd.plan_id = ? AND pd.status = 'pending' "
                 "ORDER BY pd.id "
                 "LIMIT ?",
-                (plan_id, plan["batch_size"]),
+                (plan_id, batch_size),
             )
 
             if not pending_devices:
                 await _check_plan_completion(plan_id)
                 return
 
-            batch_num = plan["current_batch"] + 1
+            batch_num = int(plan["current_batch"]) + 1
 
             for pd in pending_devices:
-                if pd["online_status"] == "offline":
+                online_status = str(pd["online_status"] or "").strip().lower()
+                if online_status == "offline":
                     await db.execute(
                         "UPDATE ota_plan_devices SET status = 'skipped_offline', batch_number = ? WHERE id = ?",
                         (batch_num, pd["id"]),
@@ -133,8 +145,15 @@ async def _push_next_batch(plan_id: int):
                 (batch_num, plan_id),
             )
             await db.commit()
+
+            logger.info(
+                f"Plan {plan_id} batch {batch_num}: pushed {len(pending_devices)} devices "
+                f"(batch_size={batch_size})"
+            )
         finally:
             await db.close()
+
+        await asyncio.sleep(0)
 
         remaining_db = await get_db()
         try:
@@ -146,8 +165,10 @@ async def _push_next_batch(plan_id: int):
             await remaining_db.close()
 
         if remaining:
-            interval = plan["batch_interval"]
+            interval = int(plan["batch_interval"]) if plan["batch_interval"] else 0
+            logger.info(f"Plan {plan_id}: waiting {interval}s before next batch")
             await asyncio.sleep(interval)
+            await asyncio.sleep(0)
 
             status_db = await get_db()
             try:
@@ -157,12 +178,18 @@ async def _push_next_batch(plan_id: int):
             finally:
                 await status_db.close()
 
-            if plan_check and plan_check[0]["status"] == "running":
-                await _push_next_batch(plan_id)
+            if plan_check and str(plan_check[0]["status"]).strip() == "running":
+                next_task = asyncio.create_task(_push_next_batch(plan_id))
+                _background_tasks[plan_id] = next_task
+            else:
+                logger.info(f"Plan {plan_id}: stopped before next batch")
         else:
             await _check_plan_completion(plan_id)
+    except asyncio.CancelledError:
+        logger.info(f"Plan {plan_id}: batch task cancelled")
+        raise
     except Exception as e:
-        logger.error(f"Error in _push_next_batch for plan {plan_id}: {e}")
+        logger.error(f"Error in _push_next_batch for plan {plan_id}: {e}", exc_info=True)
 
 
 async def _check_plan_completion(plan_id: int):
@@ -418,35 +445,35 @@ async def create_plan(body: PlanCreate):
                 status_code=400,
                 detail="batch_size must be between 1 and 100",
             )
+    if body.failure_threshold < 0.01 or body.failure_threshold > 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="failure_threshold must be between 0.01 and 1.0",
+        )
 
     db = await get_db()
     try:
+        await db.execute("BEGIN IMMEDIATE")
+
         query = "SELECT * FROM ota_devices WHERE device_model = ?"
         params: list = [body.device_model]
 
         if body.filter_group:
             query += " AND group_tag = ?"
             params.append(body.filter_group)
-        if body.filter_version_min or body.filter_version_max:
-            all_model_devices = await db.execute_fetchall(
-                "SELECT * FROM ota_devices WHERE device_model = ?"
-                + (" AND group_tag = ?" if body.filter_group else ""),
-                params,
-            )
-            filtered_ids = []
-            for d in all_model_devices:
-                if _version_in_range(d["firmware_version"], body.filter_version_min, body.filter_version_max):
-                    filtered_ids.append(d["id"])
-            if not filtered_ids:
-                eligible_devices = []
-            else:
-                placeholders = ",".join("?" for _ in filtered_ids)
-                eligible_devices = await db.execute_fetchall(
-                    f"SELECT * FROM ota_devices WHERE id IN ({placeholders})",
-                    filtered_ids,
-                )
-        else:
-            eligible_devices = await db.execute_fetchall(query, params)
+
+        candidates = await db.execute_fetchall(query, params)
+
+        eligible_devices = []
+        for dev in candidates:
+            if body.filter_version_min or body.filter_version_max:
+                if not _version_in_range(
+                    str(dev["firmware_version"] or ""),
+                    body.filter_version_min,
+                    body.filter_version_max,
+                ):
+                    continue
+            eligible_devices.append(dev)
 
         if len(eligible_devices) > 1000:
             raise HTTPException(
@@ -469,7 +496,7 @@ async def create_plan(body: PlanCreate):
 
         for dev in eligible_devices:
             await db.execute(
-                "INSERT INTO ota_plan_devices (plan_id, device_id, target_version) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO ota_plan_devices (plan_id, device_id, target_version) VALUES (?, ?, ?)",
                 (plan_id, dev["id"], body.target_version),
             )
 
@@ -478,6 +505,13 @@ async def create_plan(body: PlanCreate):
         row = await db.execute_fetchall(
             "SELECT * FROM ota_plans WHERE id = ?", (plan_id,)
         )
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error creating plan: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"failed to create plan: {e}")
     finally:
         await db.close()
 
@@ -660,6 +694,9 @@ async def resume_plan(plan_id: int):
 
     if plan["strategy"] == "batch":
         task = asyncio.create_task(_push_next_batch(plan_id))
+        _background_tasks[plan_id] = task
+    else:
+        task = asyncio.create_task(_push_batch(plan_id))
         _background_tasks[plan_id] = task
 
     return {"message": "plan resumed", "plan_id": plan_id}
