@@ -33,7 +33,6 @@ from app.models import (
     NUMERIC_FIELD_WEIGHT,
     LENGTH_FIELD_WEIGHT,
     RARE_VALUE_PENALTY,
-    PARSE_ERROR_PENALTY,
 )
 from app.database import get_db
 from app.utils import hex_to_bytes, validate_hex
@@ -166,16 +165,24 @@ def _compute_bytes_stats(field_name: str, values: list[tuple[str, int]]) -> Byte
 
 @router.post("/train", response_model=BaselineTrainResult)
 async def train_baseline(body: BaselineCreateRequest):
-    if len(body.sample_ids) < MIN_TRAIN_SAMPLES:
+    unique_ids = list(dict.fromkeys(body.sample_ids))
+    duplicate_count = len(body.sample_ids) - len(unique_ids)
+
+    if len(unique_ids) < MIN_TRAIN_SAMPLES:
+        msg = f"at least {MIN_TRAIN_SAMPLES} unique samples required for training"
+        if duplicate_count > 0:
+            msg += f" (removed {duplicate_count} duplicates)"
         raise HTTPException(
             status_code=400,
-            detail=f"at least {MIN_TRAIN_SAMPLES} samples required for training",
+            detail=msg,
         )
-    if len(body.sample_ids) > MAX_TRAIN_SAMPLES:
+    if len(unique_ids) > MAX_TRAIN_SAMPLES:
         raise HTTPException(
             status_code=400,
             detail=f"maximum {MAX_TRAIN_SAMPLES} samples allowed for training",
         )
+
+    body.sample_ids = unique_ids
 
     fields, actual_version = await _get_template_fields(body.template_id, body.template_version)
     field_defs_by_name = {f.name: f for f in fields}
@@ -391,21 +398,42 @@ def _detect_anomaly_for_fields(
             continue
 
         if pf.status == "parse_error":
-            deviation_score = PARSE_ERROR_PENALTY
-            weight = NUMERIC_FIELD_WEIGHT if field_type == "numeric" else LENGTH_FIELD_WEIGHT
-            deviations.append(
-                FieldDeviationDetail(
-                    field_name=field_name,
-                    field_type=field_type,
-                    value=pf.value,
-                    z_score=None,
-                    length_z_score=None,
-                    is_rare_value=False,
-                    deviation_score=round(deviation_score * weight, 4),
+            if field_type == "numeric":
+                z_score = 10.0
+                deviation_score = z_score * NUMERIC_FIELD_WEIGHT
+                deviations.append(
+                    FieldDeviationDetail(
+                        field_name=field_name,
+                        field_type=field_type,
+                        value=pf.value,
+                        z_score=z_score,
+                        length_z_score=None,
+                        is_rare_value=False,
+                        deviation_score=round(deviation_score, 4),
+                    )
                 )
-            )
-            total_score += deviation_score * weight
-            total_weight += weight
+                total_score += deviation_score
+                total_weight += NUMERIC_FIELD_WEIGHT
+            else:
+                length_z_score = 10.0
+                length_score = abs(length_z_score) * LENGTH_FIELD_WEIGHT
+                is_rare = True
+                rare_penalty = RARE_VALUE_PENALTY
+                deviation_score = length_score + rare_penalty
+
+                deviations.append(
+                    FieldDeviationDetail(
+                        field_name=field_name,
+                        field_type=field_type,
+                        value=pf.value,
+                        z_score=None,
+                        length_z_score=length_z_score,
+                        is_rare_value=is_rare,
+                        deviation_score=round(deviation_score, 4),
+                    )
+                )
+                total_score += deviation_score
+                total_weight += LENGTH_FIELD_WEIGHT
             continue
 
         if pf.value is None:
@@ -523,7 +551,11 @@ async def detect_anomaly(body: AnomalyDetectRequest):
             raise HTTPException(status_code=400, detail=f"invalid hex data: {e}")
 
     raw = hex_to_bytes(hex_data)
-    parse_result = parse_message(raw, fields, template_id, body.sample_id or 0, template_version)
+    sample_id_for_parse = body.sample_id if body.sample_id is not None else 0
+    parse_result = parse_message(raw, fields, template_id, sample_id_for_parse, template_version)
+
+    if body.sample_id is None and parse_result is not None:
+        parse_result.sample_id = 0
 
     deviations, overall_score = _detect_anomaly_for_fields(parse_result, fields_stats)
     level = _classify_level(overall_score)
