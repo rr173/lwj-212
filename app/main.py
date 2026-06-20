@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare, baselines, editor
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare, baselines, editor, sequence_patterns
 
 
 @asynccontextmanager
@@ -39,6 +39,7 @@ app.include_router(batch_push.router)
 app.include_router(config_compare.router)
 app.include_router(baselines.router)
 app.include_router(editor.router)
+app.include_router(sequence_patterns.router)
 
 
 @app.get("/")

@@ -1374,3 +1374,108 @@ class BatchMutateResult(BaseModel):
     template_version: int
     total_generated: int
     samples: list[MutatedSampleOut]
+
+
+# ============ Sequence Pattern Matching Models ============
+
+MAX_PATTERN_STEPS = 10
+MIN_PATTERN_STEPS = 2
+MAX_SEARCH_SAMPLES = 500
+MAX_GAP_N = 100
+
+COMPARE_OPS = {"eq", "ne", "gt", "lt", "gte", "lte"}
+GAP_TYPES = {"adjacent", "max_n", "unlimited"}
+NUMERIC_FIELD_TYPES = {"uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"}
+
+
+class FieldConstraint(BaseModel):
+    field: str
+    op: Literal["eq", "ne", "gt", "lt", "gte", "lte"]
+    value: str | int | float | None = None
+    ref: str | None = None
+
+
+class PatternStepCreate(BaseModel):
+    template_id: int
+    template_version: int | None = None
+    constraints: list[FieldConstraint] = []
+    gap_type: Literal["adjacent", "max_n", "unlimited"] = "unlimited"
+    gap_max_n: int | None = Field(default=None, ge=1, le=100)
+
+
+class PatternCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    steps: list[PatternStepCreate] = Field(..., min_length=2, max_length=10)
+
+
+class PatternStepOut(BaseModel):
+    id: int
+    pattern_id: int
+    step_index: int
+    template_id: int
+    template_version: int
+    constraints: list[FieldConstraint]
+    gap_type: str
+    gap_max_n: int | None
+
+
+class PatternOut(BaseModel):
+    id: int
+    name: str
+    step_count: int
+    created_at: str
+
+
+class PatternDetailOut(BaseModel):
+    id: int
+    name: str
+    steps: list[PatternStepOut]
+    created_at: str
+
+
+class PatternMatchHit(BaseModel):
+    step_index: int
+    sample_id: int
+    sample_position: int
+
+
+class PatternMatchResult(BaseModel):
+    hit_id: int
+    hits: list[PatternMatchHit]
+
+
+class PatternSearchRequest(BaseModel):
+    pattern_id: int
+    sample_ids: list[int] = Field(..., min_length=2, max_length=500)
+
+
+class PatternSearchResult(BaseModel):
+    pattern_id: int
+    pattern_name: str
+    total_samples: int
+    match_count: int
+    matches: list[PatternMatchResult]
+
+
+class PatternAnnotateRequest(BaseModel):
+    pattern_id: int
+    sample_ids: list[int] = Field(..., min_length=2, max_length=500)
+
+
+class SampleTagOut(BaseModel):
+    id: int
+    sample_id: int
+    tag: str
+    pattern_id: int | None
+    pattern_name: str | None
+    step_index: int | None
+    created_at: str
+
+
+class PatternAnnotateResult(BaseModel):
+    pattern_id: int
+    pattern_name: str
+    total_samples: int
+    match_count: int
+    tagged_sample_count: int
+    tags_created: int

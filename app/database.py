@@ -478,6 +478,56 @@ CREATE_BASELINE_SNAPSHOTS_TEMPLATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_baseline_snapshots_template ON baseline_snapshots (template_id, created_at DESC)
 """
 
+CREATE_SEQUENCE_PATTERNS_TABLE = """
+CREATE TABLE IF NOT EXISTS sequence_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    step_count INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_SEQUENCE_PATTERN_STEPS_TABLE = """
+CREATE TABLE IF NOT EXISTS sequence_pattern_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern_id INTEGER NOT NULL,
+    step_index INTEGER NOT NULL,
+    template_id INTEGER NOT NULL,
+    template_version INTEGER NOT NULL,
+    constraints_json TEXT NOT NULL,
+    gap_type TEXT NOT NULL CHECK(gap_type IN ('adjacent', 'max_n', 'unlimited')),
+    gap_max_n INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(pattern_id, step_index),
+    FOREIGN KEY (pattern_id) REFERENCES sequence_patterns (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_SEQUENCE_PATTERN_STEPS_PATTERN_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_seq_pattern_steps_pattern ON sequence_pattern_steps (pattern_id, step_index)
+"""
+
+CREATE_SAMPLE_TAGS_TABLE = """
+CREATE TABLE IF NOT EXISTS sample_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id INTEGER NOT NULL,
+    tag TEXT NOT NULL,
+    pattern_id INTEGER,
+    pattern_name TEXT,
+    step_index INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (sample_id) REFERENCES samples (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_SAMPLE_TAGS_SAMPLE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_sample_tags_sample ON sample_tags (sample_id)
+"""
+
+CREATE_SAMPLE_TAGS_TAG_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_sample_tags_tag ON sample_tags (tag)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -567,6 +617,12 @@ async def init_db():
         await db.execute(CREATE_CFG_CHANGE_HISTORY_CHANGED_AT_INDEX)
         await db.execute(CREATE_BASELINE_SNAPSHOTS_TABLE)
         await db.execute(CREATE_BASELINE_SNAPSHOTS_TEMPLATE_INDEX)
+        await db.execute(CREATE_SEQUENCE_PATTERNS_TABLE)
+        await db.execute(CREATE_SEQUENCE_PATTERN_STEPS_TABLE)
+        await db.execute(CREATE_SEQUENCE_PATTERN_STEPS_PATTERN_INDEX)
+        await db.execute(CREATE_SAMPLE_TAGS_TABLE)
+        await db.execute(CREATE_SAMPLE_TAGS_SAMPLE_INDEX)
+        await db.execute(CREATE_SAMPLE_TAGS_TAG_INDEX)
         await db.commit()
     finally:
         await db.close()
