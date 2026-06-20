@@ -505,6 +505,20 @@ async def search_pattern(body: PatternSearchRequest):
         raise HTTPException(status_code=400, detail="pattern must have at least 2 steps")
 
     n_samples = len(body.sample_ids)
+
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" * n_samples)
+        existing_rows = await db.execute_fetchall(
+            f"SELECT id FROM samples WHERE id IN ({placeholders})",
+            body.sample_ids,
+        )
+        existing_ids = {r["id"] for r in existing_rows}
+    finally:
+        await db.close()
+
+    skipped_sample_ids = [sid for sid in body.sample_ids if sid not in existing_ids]
+
     parsed_cache: dict[tuple[int, int, int], ParseResult | None] = {}
 
     async def _get_parsed(sid: int, tid: int, tv: int) -> ParseResult | None:
@@ -538,6 +552,10 @@ async def search_pattern(body: PatternSearchRequest):
         start_pos = current_position + 1 if current_hits else 0
 
         for pos in range(start_pos, n_samples):
+            sample_id = body.sample_ids[pos]
+            if sample_id not in existing_ids:
+                continue
+
             if step_idx > 1 and current_position >= 0:
                 should_break = False
                 if not _check_gap_constraint(step, current_position, pos):
@@ -551,7 +569,6 @@ async def search_pattern(body: PatternSearchRequest):
                         break
                     continue
 
-            sample_id = body.sample_ids[pos]
             parse_result = await _get_parsed(sample_id, step.template_id, step.template_version)
 
             if parse_result is None:
@@ -588,6 +605,7 @@ async def search_pattern(body: PatternSearchRequest):
         pattern_name=pattern_name,
         total_samples=n_samples,
         match_count=len(matches),
+        skipped_sample_ids=skipped_sample_ids,
         matches=matches,
     )
 
@@ -636,6 +654,7 @@ async def annotate_pattern(body: PatternAnnotateRequest):
         pattern_name=pattern_name,
         total_samples=len(body.sample_ids),
         match_count=search_result.match_count,
+        skipped_sample_ids=search_result.skipped_sample_ids,
         tagged_sample_count=len(tagged_samples),
         tags_created=tags_created,
     )
@@ -703,6 +722,25 @@ async def list_samples_by_tag(
     finally:
         await db.close()
 
+    sample_ids = [r["id"] for r in rows]
+
+    db2 = await get_db()
+    try:
+        if sample_ids:
+            placeholders = ",".join("?" * len(sample_ids))
+            tag_rows = await db2.execute_fetchall(
+                f"SELECT sample_id, tag FROM sample_tags WHERE sample_id IN ({placeholders}) ORDER BY id ASC",
+                sample_ids,
+            )
+        else:
+            tag_rows = []
+    finally:
+        await db2.close()
+
+    tags_map: dict[int, list[str]] = {sid: [] for sid in sample_ids}
+    for tr in tag_rows:
+        tags_map[tr["sample_id"]].append(tr["tag"])
+
     return [
         SampleOut(
             id=r["id"],
@@ -712,6 +750,7 @@ async def list_samples_by_tag(
             entropy=r["entropy"],
             note=r["note"] or "",
             created_at=r["created_at"] or "",
+            tags=tags_map.get(r["id"], []),
         )
         for r in rows
     ]

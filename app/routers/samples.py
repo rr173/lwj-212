@@ -8,6 +8,38 @@ router = APIRouter(prefix="/api/samples", tags=["samples"])
 MAX_HEX_LENGTH = 64 * 1024 * 2
 
 
+async def _load_tags_for_samples(sample_ids: list[int]) -> dict[int, list[str]]:
+    if not sample_ids:
+        return {}
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" * len(sample_ids))
+        rows = await db.execute_fetchall(
+            f"SELECT sample_id, tag FROM sample_tags WHERE sample_id IN ({placeholders}) ORDER BY id ASC",
+            sample_ids,
+        )
+    finally:
+        await db.close()
+
+    tags_map: dict[int, list[str]] = {sid: [] for sid in sample_ids}
+    for r in rows:
+        tags_map[r["sample_id"]].append(r["tag"])
+    return tags_map
+
+
+def _row_to_sample_out(row, tags: list[str] | None = None) -> SampleOut:
+    return SampleOut(
+        id=row["id"],
+        name=row["name"],
+        hex_data=row["hex_data"],
+        byte_length=row["byte_length"],
+        entropy=row["entropy"],
+        note=row["note"] or "",
+        created_at=row["created_at"] or "",
+        tags=tags or [],
+    )
+
+
 @router.post("", response_model=SampleOut, status_code=201)
 async def create_sample(body: SampleCreate):
     try:
@@ -36,14 +68,17 @@ async def create_sample(body: SampleCreate):
     finally:
         await db.close()
 
-    return SampleOut(
-        id=sample_id,
-        name=body.name,
-        hex_data=cleaned,
-        byte_length=byte_length,
-        entropy=entropy,
-        note=body.note,
-        created_at="",
+    return _row_to_sample_out(
+        {
+            "id": sample_id,
+            "name": body.name,
+            "hex_data": cleaned,
+            "byte_length": byte_length,
+            "entropy": entropy,
+            "note": body.note,
+            "created_at": "",
+        },
+        tags=[],
     )
 
 
@@ -68,18 +103,10 @@ async def list_samples(
     finally:
         await db.close()
 
-    return [
-        SampleOut(
-            id=r["id"],
-            name=r["name"],
-            hex_data=r["hex_data"],
-            byte_length=r["byte_length"],
-            entropy=r["entropy"],
-            note=r["note"] or "",
-            created_at=r["created_at"] or "",
-        )
-        for r in rows
-    ]
+    sample_ids = [r["id"] for r in rows]
+    tags_map = await _load_tags_for_samples(sample_ids)
+
+    return [_row_to_sample_out(r, tags_map.get(r["id"], [])) for r in rows]
 
 
 @router.get("/{sample_id}", response_model=SampleOut)
@@ -96,12 +123,5 @@ async def get_sample(sample_id: int):
         raise HTTPException(status_code=404, detail="sample not found")
 
     r = row[0]
-    return SampleOut(
-        id=r["id"],
-        name=r["name"],
-        hex_data=r["hex_data"],
-        byte_length=r["byte_length"],
-        entropy=r["entropy"],
-        note=r["note"] or "",
-        created_at=r["created_at"] or "",
-    )
+    tags_map = await _load_tags_for_samples([sample_id])
+    return _row_to_sample_out(r, tags_map.get(sample_id, []))

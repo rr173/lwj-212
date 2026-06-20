@@ -66,6 +66,7 @@ class SampleOut(BaseModel):
     entropy: float
     note: str
     created_at: str
+    tags: list[str] = []
 
 
 class ParsedField(BaseModel):
@@ -1454,6 +1455,7 @@ class PatternSearchResult(BaseModel):
     pattern_name: str
     total_samples: int
     match_count: int
+    skipped_sample_ids: list[int] = []
     matches: list[PatternMatchResult]
 
 
@@ -1477,5 +1479,6 @@ class PatternAnnotateResult(BaseModel):
     pattern_name: str
     total_samples: int
     match_count: int
+    skipped_sample_ids: list[int] = []
     tagged_sample_count: int
     tags_created: int
