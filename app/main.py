@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare, baselines
 
 
 @asynccontextmanager
@@ -15,7 +15,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Binary Protocol Parsing Workbench",
     description="Define protocol templates and parse binary message samples into structured fields. Includes session recording, playback, request-response pairing, protocol fuzz testing, fragment reassembly, alert rule engine, firmware signature integrity verification chain, IoT device alert aggregation & upgrade decision engine, and device configuration template & batch deployment service.",
-    version="1.10.0",
+    version="1.11.0",
     lifespan=lifespan,
 )
 
@@ -37,6 +37,7 @@ app.include_router(config_templates.router)
 app.include_router(device_config.router)
 app.include_router(batch_push.router)
 app.include_router(config_compare.router)
+app.include_router(baselines.router)
 
 
 @app.get("/")
@@ -96,5 +97,12 @@ async def root():
             "Batch deployment: push config changes to all devices using a template, pre-check all-or-nothing",
             "Config comparison: device-vs-device diff and device-vs-template deviation analysis",
             "Preloaded ESP32-DevKit config template with 5 items and 5 bound devices (2 with modified sample_rate)",
+            "Traffic baseline learning & anomaly detection — auto-learn normal patterns from historical samples",
+            "Per-field statistical baseline: numeric fields (mean/std), bytes/ascii fields (length mean/std + top-20 frequent values)",
+            "Z-score based anomaly scoring with weighted average (numeric weight 1.0, length weight 0.5, rare value +2.0 penalty)",
+            "Three-level classification: normal (<1.5), suspicious (1.5-3.0), anomaly (>=3.0)",
+            "Batch detection with results sorted by anomaly score and statistical summary",
+            "Baseline comparison — drift detection across two snapshots (mean shift >2 std = significant drift)",
+            "Pre-trained demo baseline on FEED protocol samples (excluding truncated one)",
         ],
     }

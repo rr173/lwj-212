@@ -1092,3 +1092,182 @@ class UpgradeDecisionResult(BaseModel):
     window_start: int
     window_end: int
     recommendations: list[UpgradeRecommendation]
+
+
+# ============ Baseline Learning & Anomaly Detection Models ============
+
+NUMERIC_FIELD_TYPES = {"uint8", "uint16_be", "uint16_le", "uint32_be", "uint32_le"}
+BYTES_FIELD_TYPES = {"bytes", "ascii"}
+TOP_FREQUENCY_COUNT = 20
+MIN_TRAIN_SAMPLES = 10
+MAX_TRAIN_SAMPLES = 200
+MAX_BATCH_DETECT_SAMPLES = 100
+ANOMALY_THRESHOLD = 3.0
+SUSPICIOUS_THRESHOLD = 1.5
+NORMAL_THRESHOLD = 1.5
+
+NUMERIC_FIELD_WEIGHT = 1.0
+LENGTH_FIELD_WEIGHT = 0.5
+RARE_VALUE_PENALTY = 2.0
+PARSE_ERROR_PENALTY = 15.0
+
+
+class NumericFieldStats(BaseModel):
+    field_name: str
+    field_type: str = "numeric"
+    sample_count: int
+    mean: float
+    std_dev: float
+    min_value: float
+    max_value: float
+
+
+class BytesFieldStats(BaseModel):
+    field_name: str
+    field_type: str = "bytes"
+    sample_count: int
+    length_mean: float
+    length_std_dev: float
+    length_min: int
+    length_max: int
+    top_values: list[dict]
+
+
+FieldStats = NumericFieldStats | BytesFieldStats
+
+
+class BaselineCreateRequest(BaseModel):
+    template_id: int
+    sample_ids: list[int]
+    name: str
+    description: str = ""
+    template_version: int | None = None
+
+
+class BaselineSnapshotOut(BaseModel):
+    id: int
+    template_id: int
+    template_version: int
+    name: str
+    description: str
+    sample_count: int
+    skipped_count: int
+    created_at: str
+
+
+class BaselineSnapshotDetailOut(BaselineSnapshotOut):
+    fields_stats: list[FieldStats]
+
+
+class BaselineTrainResult(BaseModel):
+    baseline_id: int
+    template_id: int
+    template_version: int
+    total_samples: int
+    trained_samples: int
+    skipped_samples: int
+    skipped_sample_ids: list[int]
+    created_at: str
+
+
+class FieldDeviationDetail(BaseModel):
+    field_name: str
+    field_type: str
+    value: str | None
+    z_score: float | None
+    length_z_score: float | None
+    is_rare_value: bool
+    deviation_score: float
+
+
+class AnomalyDetectRequest(BaseModel):
+    baseline_id: int
+    sample_id: int | None = None
+    hex_data: str | None = None
+
+
+class AnomalyDetectResult(BaseModel):
+    baseline_id: int
+    sample_id: int | None
+    template_id: int
+    template_version: int
+    overall_score: float
+    level: Literal["normal", "suspicious", "anomaly"]
+    field_deviations: list[FieldDeviationDetail]
+    parse_result: ParseResult | None = None
+
+
+class BatchDetectRequest(BaseModel):
+    baseline_id: int
+    sample_ids: list[int]
+
+
+class BatchDetectItem(BaseModel):
+    sample_id: int
+    sample_name: str | None
+    overall_score: float
+    level: Literal["normal", "suspicious", "anomaly"]
+    top_deviations: list[FieldDeviationDetail]
+
+
+class BatchDetectSummary(BaseModel):
+    total_samples: int
+    anomaly_count: int
+    suspicious_count: int
+    normal_count: int
+    avg_score: float
+    max_score: float
+    max_score_sample_id: int | None
+
+
+class BatchDetectResult(BaseModel):
+    baseline_id: int
+    summary: BatchDetectSummary
+    results: list[BatchDetectItem]
+
+
+class BaselineCompareRequest(BaseModel):
+    baseline_a_id: int
+    baseline_b_id: int
+
+
+class NumericFieldDrift(BaseModel):
+    field_name: str
+    field_type: str = "numeric"
+    mean_a: float
+    mean_b: float
+    mean_shift: float
+    mean_shift_std_units: float
+    std_dev_a: float
+    std_dev_b: float
+    std_dev_change_ratio: float
+    drift_level: Literal["stable", "moderate", "significant"]
+
+
+class BytesFieldDrift(BaseModel):
+    field_name: str
+    field_type: str = "bytes"
+    length_mean_a: float
+    length_mean_b: float
+    length_mean_shift_std_units: float
+    top_values_a: list[str]
+    top_values_b: list[str]
+    overlap_count: int
+    overlap_ratio: float
+    drift_level: Literal["stable", "moderate", "significant"]
+
+
+FieldDrift = NumericFieldDrift | BytesFieldDrift
+
+
+class BaselineCompareResult(BaseModel):
+    baseline_a_id: int
+    baseline_b_id: int
+    template_id: int
+    template_version: int
+    sample_count_a: int
+    sample_count_b: int
+    significant_drift_count: int
+    moderate_drift_count: int
+    stable_count: int
+    field_drifts: list[FieldDrift]

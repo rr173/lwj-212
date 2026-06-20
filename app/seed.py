@@ -2,8 +2,10 @@ import json
 import hashlib
 import hmac
 import time
+import math
+from collections import Counter
 from app.database import get_db
-from app.models import FieldDef
+from app.models import FieldDef, NUMERIC_FIELD_TYPES, BYTES_FIELD_TYPES, TOP_FREQUENCY_COUNT
 from app.utils import validate_hex, hex_to_bytes, shannon_entropy, bytes_to_hex
 from app.parser import parse_message
 
@@ -44,6 +46,41 @@ DEMO_SAMPLES = [
         "name": "Command - Config",
         "hex_data": "feed01020006aabbccddeeff7738",
         "note": "msg_type=0x02 (command), 6-byte payload with configuration data",
+    },
+    {
+        "name": "Sensor Data - Pressure",
+        "hex_data": "feed01010006112233445566a7b8",
+        "note": "msg_type=0x01 (sensor), 6-byte payload with pressure reading",
+    },
+    {
+        "name": "Sensor Data - Light",
+        "hex_data": "feed01010004aabbccdd9012",
+        "note": "msg_type=0x01 (sensor), 4-byte payload with light intensity",
+    },
+    {
+        "name": "Command - Status Query",
+        "hex_data": "feed0102000200ff3344",
+        "note": "msg_type=0x02 (command), 2-byte payload with status query",
+    },
+    {
+        "name": "Sensor Data - Battery",
+        "hex_data": "feed010100035500ff5566",
+        "note": "msg_type=0x01 (sensor), 3-byte payload with battery level",
+    },
+    {
+        "name": "Command - Set Time",
+        "hex_data": "feed01020004deadbeef1122",
+        "note": "msg_type=0x02 (command), 4-byte payload with timestamp",
+    },
+    {
+        "name": "Sensor Data - Acceleration",
+        "hex_data": "feed01010006001122334455bbcc",
+        "note": "msg_type=0x01 (sensor), 6-byte payload with accel XYZ",
+    },
+    {
+        "name": "Command - Firmware Version",
+        "hex_data": "feed01020001ff7788",
+        "note": "msg_type=0x02 (command), 1-byte payload version request",
     },
     {
         "name": "Truncated - Missing CRC",
@@ -275,10 +312,131 @@ async def seed_if_empty():
 
         await db.commit()
 
+        sm_rows = await db.execute_fetchall(
+            "SELECT id FROM state_machines WHERE template_id = ?", (template_id,)
+        )
+        if not sm_rows:
+            sm_cur = await db.execute(
+                """
+                INSERT INTO state_machines (template_id, name, description)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    template_id,
+                    "Demo: FEED Protocol State Machine",
+                    "Demonstrates a simple 3-state protocol lifecycle: idle -> active -> closed, triggered by msg_type field.",
+                ),
+            )
+            state_machine_id = sm_cur.lastrowid
+
+            idle_cur = await db.execute(
+                "INSERT INTO sm_states (state_machine_id, name, state_type) VALUES (?, ?, 'initial')",
+                (state_machine_id, "idle"),
+            )
+            idle_id = idle_cur.lastrowid
+
+            active_cur = await db.execute(
+                "INSERT INTO sm_states (state_machine_id, name, state_type) VALUES (?, ?, 'intermediate')",
+                (state_machine_id, "active"),
+            )
+            active_id = active_cur.lastrowid
+
+            closed_cur = await db.execute(
+                "INSERT INTO sm_states (state_machine_id, name, state_type) VALUES (?, ?, 'terminal')",
+                (state_machine_id, "closed"),
+            )
+            closed_id = closed_cur.lastrowid
+
+            await db.execute(
+                """
+                INSERT INTO sm_transitions 
+                (state_machine_id, from_state_id, to_state_id, trigger_field, trigger_value, direction_constraint)
+                VALUES (?, ?, ?, 'msg_type', '1', 'both')
+                """,
+                (state_machine_id, idle_id, active_id),
+            )
+
+            await db.execute(
+                """
+                INSERT INTO sm_transitions 
+                (state_machine_id, from_state_id, to_state_id, trigger_field, trigger_value, direction_constraint)
+                VALUES (?, ?, ?, 'msg_type', '2', 'both')
+                """,
+                (state_machine_id, active_id, closed_id),
+            )
+
+        s_rows = await db.execute_fetchall(
+            "SELECT id FROM sessions WHERE name = ?", (DEMO_SESSION_NAME,)
+        )
+        if s_rows:
+            await _seed_baseline_demo(db, template_id)
+            await db.commit()
+            return
+
+        v_rows = await db.execute_fetchall(
+            "SELECT MAX(version) as max_version FROM template_versions WHERE template_id = ?",
+            (template_id,),
+        )
+        latest_version = v_rows[0]["max_version"] or 1
+
+        tv_rows = await db.execute_fetchall(
+            "SELECT fields_json FROM template_versions WHERE template_id = ? AND version = ?",
+            (template_id, latest_version),
+        )
+        template_fields = [FieldDef(**f) for f in json.loads(tv_rows[0]["fields_json"])]
+
+        cursor = await db.execute(
+            "INSERT INTO sessions (name, template_id, template_version, note) VALUES (?, ?, ?, ?)",
+            (
+                DEMO_SESSION_NAME,
+                template_id,
+                latest_version,
+                "Demonstrates request-response pairing: 3 complete pairs + 1 unanswered request + 1 unsolicited push.",
+            ),
+        )
+        session_id = cursor.lastrowid
+
+        for idx, frame in enumerate(DEMO_SESSION_FRAMES):
+            seq = idx + 1
+            cleaned = validate_hex(frame["hex_data"])
+            data = hex_to_bytes(cleaned)
+            byte_length = len(data)
+            direction = frame["direction"]
+            ts = frame["relative_timestamp_ms"]
+
+            parse_result = parse_message(
+                data,
+                template_fields,
+                template_id,
+                0,
+                latest_version,
+            )
+            parse_result.sample_id = 0
+            parse_result_json = json.dumps(parse_result.model_dump())
+
+            await db.execute(
+                """
+                INSERT INTO session_frames (session_id, seq, hex_data, byte_length, direction, relative_timestamp_ms, parse_result_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    seq,
+                    cleaned,
+                    byte_length,
+                    direction,
+                    ts,
+                    parse_result_json,
+                ),
+            )
+
+        await db.commit()
+
         await _seed_firmware_demo(db)
         await _seed_ota_demo(db)
         await _seed_iot_device_alerts_demo(db)
         await _seed_config_template_demo(db)
+        await _seed_baseline_demo(db, template_id)
     finally:
         await db.close()
 
@@ -654,3 +812,168 @@ async def _seed_config_template_demo(db):
             )
 
     await db.commit()
+
+
+DEMO_BASELINE_NAME = "Demo: FEED Protocol Baseline"
+
+
+async def _seed_baseline_demo(db, template_id: int):
+    existing = await db.execute_fetchall(
+        "SELECT id FROM baseline_snapshots WHERE template_id = ? AND name = ?",
+        (template_id, DEMO_BASELINE_NAME),
+    )
+    if existing:
+        return
+
+    v_rows = await db.execute_fetchall(
+        "SELECT MAX(version) as max_version FROM template_versions WHERE template_id = ?",
+        (template_id,),
+    )
+    latest_version = v_rows[0]["max_version"] or 1
+
+    tv_rows = await db.execute_fetchall(
+        "SELECT fields_json FROM template_versions WHERE template_id = ? AND version = ?",
+        (template_id, latest_version),
+    )
+    template_fields = [FieldDef(**f) for f in json.loads(tv_rows[0]["fields_json"])]
+
+    sample_rows = await db.execute_fetchall(
+        "SELECT id, name, hex_data FROM samples ORDER BY id",
+    )
+
+    truncated_names = {"Truncated - Missing CRC"}
+    valid_samples = [
+        s for s in sample_rows if s["name"] not in truncated_names
+    ]
+
+    if len(valid_samples) < 10:
+        return
+
+    numeric_values: dict[str, list[float]] = {}
+    bytes_values: dict[str, list[tuple[str, int]]] = {}
+    for f in template_fields:
+        if f.data_type in NUMERIC_FIELD_TYPES:
+            numeric_values[f.name] = []
+        elif f.data_type in BYTES_FIELD_TYPES:
+            bytes_values[f.name] = []
+
+    trained_count = 0
+    skipped_count = 0
+
+    for s in valid_samples:
+        raw = hex_to_bytes(s["hex_data"])
+        result = parse_message(raw, template_fields, template_id, s["id"], latest_version)
+
+        has_error = any(f.status == "parse_error" for f in result.fields)
+        if has_error:
+            skipped_count += 1
+            continue
+
+        trained_count += 1
+        parsed_by_name = {f.name: f for f in result.fields if f.status == "ok"}
+
+        for f_name in numeric_values:
+            pf = parsed_by_name.get(f_name)
+            if pf and pf.value is not None:
+                try:
+                    numeric_values[f_name].append(float(pf.value))
+                except (ValueError, TypeError):
+                    pass
+
+        for f_name in bytes_values:
+            pf = parsed_by_name.get(f_name)
+            if pf and pf.value is not None:
+                bytes_values[f_name].append((pf.value, pf.length))
+
+    if trained_count < 10:
+        return
+
+    fields_stats_list: list[dict] = []
+    for f in template_fields:
+        if f.data_type in NUMERIC_FIELD_TYPES:
+            vals = numeric_values[f.name]
+            n = len(vals)
+            if n == 0:
+                stats = {
+                    "field_name": f.name,
+                    "field_type": "numeric",
+                    "sample_count": 0,
+                    "mean": 0.0,
+                    "std_dev": 0.0,
+                    "min_value": 0.0,
+                    "max_value": 0.0,
+                }
+            else:
+                mean = sum(vals) / n
+                if n == 1:
+                    variance = 0.0
+                else:
+                    variance = sum((v - mean) ** 2 for v in vals) / (n - 1)
+                std_dev = math.sqrt(variance)
+                stats = {
+                    "field_name": f.name,
+                    "field_type": "numeric",
+                    "sample_count": n,
+                    "mean": round(mean, 6),
+                    "std_dev": round(std_dev, 6),
+                    "min_value": min(vals),
+                    "max_value": max(vals),
+                }
+            fields_stats_list.append(stats)
+        elif f.data_type in BYTES_FIELD_TYPES:
+            vals = bytes_values[f.name]
+            n = len(vals)
+            if n == 0:
+                stats = {
+                    "field_name": f.name,
+                    "field_type": "bytes",
+                    "sample_count": 0,
+                    "length_mean": 0.0,
+                    "length_std_dev": 0.0,
+                    "length_min": 0,
+                    "length_max": 0,
+                    "top_values": [],
+                }
+            else:
+                lengths = [v[1] for v in vals]
+                length_mean = sum(lengths) / n
+                if n == 1:
+                    length_variance = 0.0
+                else:
+                    length_variance = sum((l - length_mean) ** 2 for l in lengths) / (n - 1)
+                length_std_dev = math.sqrt(length_variance)
+
+                val_counter = Counter(v[0] for v in vals)
+                top_items = val_counter.most_common(TOP_FREQUENCY_COUNT)
+                top_values = [{"value": val, "count": cnt} for val, cnt in top_items]
+
+                stats = {
+                    "field_name": f.name,
+                    "field_type": "bytes",
+                    "sample_count": n,
+                    "length_mean": round(length_mean, 6),
+                    "length_std_dev": round(length_std_dev, 6),
+                    "length_min": min(lengths),
+                    "length_max": max(lengths),
+                    "top_values": top_values,
+                }
+            fields_stats_list.append(stats)
+
+    fields_stats_json = json.dumps(fields_stats_list)
+
+    await db.execute(
+        """
+        INSERT INTO baseline_snapshots 
+        (template_id, template_version, name, description, sample_count, skipped_count, fields_stats_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            template_id,
+            latest_version,
+            DEMO_BASELINE_NAME,
+            "Auto-trained baseline on FEED protocol demo samples (excluding truncated)",
+            trained_count,
+            skipped_count,
+            fields_stats_json,
+        ),
+    )

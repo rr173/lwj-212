@@ -459,6 +459,25 @@ CREATE_CFG_CHANGE_HISTORY_CHANGED_AT_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_cfg_change_history_changed_at ON cfg_change_history (changed_at)
 """
 
+CREATE_BASELINE_SNAPSHOTS_TABLE = """
+CREATE TABLE IF NOT EXISTS baseline_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    template_version INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    sample_count INTEGER NOT NULL,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    fields_stats_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_BASELINE_SNAPSHOTS_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_baseline_snapshots_template ON baseline_snapshots (template_id, created_at DESC)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -546,6 +565,8 @@ async def init_db():
         await db.execute(CREATE_CFG_CHANGE_HISTORY_TABLE)
         await db.execute(CREATE_CFG_CHANGE_HISTORY_DEVICE_INDEX)
         await db.execute(CREATE_CFG_CHANGE_HISTORY_CHANGED_AT_INDEX)
+        await db.execute(CREATE_BASELINE_SNAPSHOTS_TABLE)
+        await db.execute(CREATE_BASELINE_SNAPSHOTS_TEMPLATE_INDEX)
         await db.commit()
     finally:
         await db.close()
