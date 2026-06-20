@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import init_db
 from app.seed import seed_if_empty
-from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare, baselines
+from app.routers import samples, templates, parse, sessions, fuzz, fingerprints, analysis, state_machines, fragments, alerts, firmware, segment_clustering, ota, device_alerts, config_templates, device_config, batch_push, config_compare, baselines, editor
 
 
 @asynccontextmanager
@@ -38,13 +38,14 @@ app.include_router(device_config.router)
 app.include_router(batch_push.router)
 app.include_router(config_compare.router)
 app.include_router(baselines.router)
+app.include_router(editor.router)
 
 
 @app.get("/")
 async def root():
     return {
         "service": "Binary Protocol Parsing Workbench",
-        "version": "1.10.0",
+        "version": "1.12.0",
         "docs": "/docs",
         "features": [
             "Protocol template management with versioning",
@@ -104,5 +105,12 @@ async def root():
             "Batch detection with results sorted by anomaly score and statistical summary",
             "Baseline comparison — drift detection across two snapshots (mean shift >2 std = significant drift)",
             "Pre-trained demo baseline on FEED protocol samples (excluding truncated one)",
+            "Protocol message editor & reassembler — field value editing with type validation",
+            "Message assembly: encode all fields into binary message per template definition",
+            "Ref length fields auto-overwritten with actual referenced field byte length",
+            "Until-type fields auto-append terminator byte on assembly",
+            "Conditional fields skipped when condition not met during assembly",
+            "Sample-based editing: parse sample, modify fields, reassemble with field-level diff",
+            "Batch mutation: increment/random/enumerate field value variations, auto-save as samples",
         ],
     }

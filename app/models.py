@@ -1270,3 +1270,107 @@ class BaselineCompareResult(BaseModel):
     moderate_drift_count: int
     stable_count: int
     field_drifts: list[FieldDrift]
+
+
+# ============ Editor Models ============
+
+class FieldEditInstruction(BaseModel):
+    field_name: str
+    new_value: str
+
+
+class FieldValidationDetail(BaseModel):
+    field_name: str
+    valid: bool
+    error: str = ""
+
+
+class ValidateFieldsRequest(BaseModel):
+    template_id: int
+    template_version: Optional[int] = None
+    modifications: list[FieldEditInstruction]
+
+
+class ValidateFieldsResult(BaseModel):
+    template_id: int
+    template_version: int
+    all_valid: bool
+    details: list[FieldValidationDetail]
+
+
+class FieldEncodingDetail(BaseModel):
+    field_name: str
+    data_type: str
+    value: str
+    hex: str
+    byte_length: int
+    skipped: bool = False
+
+
+class AssembleRequest(BaseModel):
+    template_id: int
+    template_version: Optional[int] = None
+    field_values: dict[str, str]
+
+
+class AssembleResult(BaseModel):
+    template_id: int
+    template_version: int
+    hex_data: str
+    byte_length: int
+    field_encodings: list[FieldEncodingDetail]
+
+
+class SampleEditRequest(BaseModel):
+    sample_id: int
+    template_id: int
+    template_version: Optional[int] = None
+    modifications: list[FieldEditInstruction] = []
+
+
+class FieldDiffEntry(BaseModel):
+    field_name: str
+    original_value: Optional[str]
+    modified_value: Optional[str]
+    original_hex: str
+    modified_hex: str
+    changed: bool
+
+
+class SampleEditResult(BaseModel):
+    sample_id: int
+    template_id: int
+    template_version: int
+    original_hex: str
+    modified_hex: str
+    field_diffs: list[FieldDiffEntry]
+    parse_result: Optional[ParseResult] = None
+
+
+class MutationRule(BaseModel):
+    target_field: str
+    mutation_type: Literal["increment", "random", "enumerate"]
+    start_value: Optional[str] = None
+    value_list: Optional[list[str]] = None
+
+
+class BatchMutateRequest(BaseModel):
+    template_id: int
+    template_version: Optional[int] = None
+    base_values: dict[str, str]
+    rules: list[MutationRule]
+    count: int = Field(default=10, ge=1, le=50, description="Number of messages to generate, max 50")
+
+
+class MutatedSampleOut(BaseModel):
+    sample_id: int
+    name: str
+    hex_data: str
+    mutations: dict[str, str]
+
+
+class BatchMutateResult(BaseModel):
+    template_id: int
+    template_version: int
+    total_generated: int
+    samples: list[MutatedSampleOut]
