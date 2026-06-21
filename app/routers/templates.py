@@ -231,7 +231,8 @@ async def update_template(template_id: int, body: TemplateUpdate):
                 parent_fields = json_to_fields(p_rows[0]["fields_json"])
                 child_count = await get_child_template_count(db, parent_template_id)
                 ok, err = validate_inheritance_constraints(
-                    parent_template_id, body.fields, parent_fields, child_count
+                    parent_template_id, body.fields, parent_fields, child_count,
+                    check_child_limit=False
                 )
                 if not ok:
                     raise HTTPException(status_code=400, detail=err)
@@ -376,9 +377,9 @@ async def prepare_migration(body: MigrationPrepareRequest):
         cache_rows = await db.execute_fetchall(
             """
             SELECT DISTINCT sample_id FROM parse_cache
-            WHERE template_id = ? AND template_version = ?
+            WHERE template_id = ?
             """,
-            (body.source_template_id, source_result["template_version"])
+            (body.source_template_id,)
         )
         sample_ids = [row["sample_id"] for row in cache_rows]
 
@@ -409,10 +410,10 @@ async def prepare_migration(body: MigrationPrepareRequest):
             await db.execute(
                 """
                 UPDATE parse_cache SET needs_reparse = 1
-                WHERE template_id = ? AND template_version = ?
+                WHERE template_id = ?
                   AND sample_id IN ({seq})
                 """.format(seq=",".join("?" * len(existing_sample_ids))),
-                (body.source_template_id, source_result["template_version"]) + tuple(existing_sample_ids)
+                (body.source_template_id,) + tuple(existing_sample_ids)
             )
 
         await db.commit()
@@ -457,10 +458,10 @@ async def execute_migration(body: MigrationExecuteRequest):
         cache_rows = await db.execute_fetchall(
             """
             SELECT pc.* FROM parse_cache pc
-            WHERE pc.template_id = ? AND pc.template_version = ? AND pc.needs_reparse = 1
+            WHERE pc.template_id = ? AND pc.needs_reparse = 1
             ORDER BY pc.id
             """,
-            (task["source_template_id"], task["source_template_version"])
+            (task["source_template_id"],)
         )
 
         success_count = 0

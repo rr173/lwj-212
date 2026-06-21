@@ -128,12 +128,13 @@ def validate_inheritance_constraints(
     parent_template_id: Optional[int],
     child_fields: list[FieldDef],
     parent_fields: Optional[list[FieldDef]] = None,
-    existing_child_count: int = 0
+    existing_child_count: int = 0,
+    check_child_limit: bool = True
 ) -> tuple[bool, Optional[str]]:
     if parent_template_id is None:
         return True, None
 
-    if existing_child_count >= MAX_CHILD_TEMPLATES:
+    if check_child_limit and existing_child_count >= MAX_CHILD_TEMPLATES:
         return False, f"parent template already has {MAX_CHILD_TEMPLATES} child templates, maximum allowed"
 
     if parent_fields is not None:
