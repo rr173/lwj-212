@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS templates (
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     fields_json TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    parent_template_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_template_id) REFERENCES templates (id)
 )
 """
 
@@ -34,9 +36,11 @@ CREATE TABLE IF NOT EXISTS template_versions (
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     fields_json TEXT NOT NULL,
+    parent_template_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(template_id, version),
-    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_template_id) REFERENCES templates (id)
 )
 """
 
@@ -528,6 +532,53 @@ CREATE_SAMPLE_TAGS_TAG_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_sample_tags_tag ON sample_tags (tag)
 """
 
+CREATE_PARSE_CACHE_TABLE = """
+CREATE TABLE IF NOT EXISTS parse_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id INTEGER NOT NULL,
+    template_id INTEGER NOT NULL,
+    template_version INTEGER NOT NULL,
+    parse_result_json TEXT NOT NULL,
+    needs_reparse INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sample_id, template_id, template_version),
+    FOREIGN KEY (sample_id) REFERENCES samples (id) ON DELETE CASCADE,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_PARSE_CACHE_SAMPLE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_parse_cache_sample ON parse_cache (sample_id)
+"""
+
+CREATE_PARSE_CACHE_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_parse_cache_template ON parse_cache (template_id, template_version)
+"""
+
+CREATE_MIGRATION_TASKS_TABLE = """
+CREATE TABLE IF NOT EXISTS migration_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_template_id INTEGER NOT NULL,
+    target_template_id INTEGER NOT NULL,
+    source_template_version INTEGER NOT NULL,
+    target_template_version INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+    total_samples INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    failed_count INTEGER DEFAULT 0,
+    skipped_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    FOREIGN KEY (source_template_id) REFERENCES templates (id) ON DELETE CASCADE,
+    FOREIGN KEY (target_template_id) REFERENCES templates (id) ON DELETE CASCADE
+)
+"""
+
+CREATE_MIGRATION_TASKS_TEMPLATE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_migration_tasks_template ON migration_tasks (source_template_id, target_template_id)
+"""
+
 
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
@@ -623,7 +674,31 @@ async def init_db():
         await db.execute(CREATE_SAMPLE_TAGS_TABLE)
         await db.execute(CREATE_SAMPLE_TAGS_SAMPLE_INDEX)
         await db.execute(CREATE_SAMPLE_TAGS_TAG_INDEX)
+        await db.execute(CREATE_PARSE_CACHE_TABLE)
+        await db.execute(CREATE_PARSE_CACHE_SAMPLE_INDEX)
+        await db.execute(CREATE_PARSE_CACHE_TEMPLATE_INDEX)
+        await db.execute(CREATE_MIGRATION_TASKS_TABLE)
+        await db.execute(CREATE_MIGRATION_TASKS_TEMPLATE_INDEX)
         await db.commit()
     finally:
         await db.close()
     await migrate_templates_to_versions()
+    await migrate_template_inheritance_columns()
+
+
+async def migrate_template_inheritance_columns():
+    db = await get_db()
+    try:
+        await db.execute("PRAGMA foreign_keys = OFF")
+        try:
+            await db.execute("ALTER TABLE templates ADD COLUMN parent_template_id INTEGER REFERENCES templates(id)")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE template_versions ADD COLUMN parent_template_id INTEGER REFERENCES templates(id)")
+        except Exception:
+            pass
+        await db.commit()
+    finally:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.close()

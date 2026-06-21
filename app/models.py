@@ -19,6 +19,7 @@ class TemplateCreate(BaseModel):
     name: str
     description: str = ""
     fields: list[FieldDef]
+    parent_template_id: Optional[int] = None
 
 
 class TemplateUpdate(BaseModel):
@@ -31,6 +32,8 @@ class TemplateOut(BaseModel):
     name: str
     description: str
     fields: list[FieldDef]
+    parent_template_id: Optional[int] = None
+    child_template_count: int = 0
     created_at: str
 
 
@@ -41,6 +44,7 @@ class TemplateVersionOut(BaseModel):
     name: str
     description: str
     fields: list[FieldDef]
+    parent_template_id: Optional[int] = None
     created_at: str
 
 
@@ -1482,3 +1486,97 @@ class PatternAnnotateResult(BaseModel):
     skipped_sample_ids: list[int] = []
     tagged_sample_count: int
     tags_created: int
+
+
+# ============ Template Inheritance & Diff Models ============
+
+MAX_CHILD_TEMPLATES = 5
+
+
+class FullFieldsResult(BaseModel):
+    template_id: int
+    template_version: int
+    parent_template_id: Optional[int] = None
+    parent_template_version: Optional[int] = None
+    fields: list[FieldDef]
+    total_fields: int
+    inherited_fields: int
+    overridden_fields: int
+    new_fields: int
+
+
+class FieldAttributeDiff(BaseModel):
+    attribute: str
+    a_value: Optional[str]
+    b_value: Optional[str]
+
+
+class FieldDefDiff(BaseModel):
+    field_name: str
+    diff_type: Literal["only_a", "only_b", "modified"]
+    a_def: Optional[FieldDef] = None
+    b_def: Optional[FieldDef] = None
+    modified_attributes: list[FieldAttributeDiff] = []
+
+
+class TemplateDiffResult(BaseModel):
+    template_a_id: int
+    template_a_version: int
+    template_b_id: int
+    template_b_version: int
+    only_a: list[FieldDef]
+    only_b: list[FieldDef]
+    modified: list[FieldDefDiff]
+    same_fields: int
+    total_diff_fields: int
+
+
+class MigrationPrepareRequest(BaseModel):
+    source_template_id: int
+    target_template_id: int
+
+
+class MigrationPrepareResult(BaseModel):
+    migration_task_id: int
+    source_template_id: int
+    target_template_id: int
+    total_samples_marked: int
+
+
+class MigrationExecuteRequest(BaseModel):
+    migration_task_id: int
+
+
+class MigrationExecuteResult(BaseModel):
+    migration_task_id: int
+    total_samples: int
+    success_count: int
+    failed_count: int
+    skipped_count: int
+    completed: bool
+
+
+class MigrationTaskStatus(BaseModel):
+    id: int
+    source_template_id: int
+    target_template_id: int
+    source_template_version: int
+    target_template_version: int
+    status: Literal["pending", "running", "completed", "failed"]
+    total_samples: int
+    success_count: int
+    failed_count: int
+    skipped_count: int
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class ParseCacheOut(BaseModel):
+    id: int
+    sample_id: int
+    template_id: int
+    template_version: int
+    parse_result_json: str
+    created_at: str
+    needs_reparse: bool = False

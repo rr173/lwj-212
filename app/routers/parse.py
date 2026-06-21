@@ -13,39 +13,59 @@ from app.models import (
     ParseResult,
 )
 from app.database import get_db
-from app.utils import hex_to_bytes
+from app.utils import hex_to_bytes, get_full_fields_internal
 from app.parser import parse_message
 
 router = APIRouter(prefix="/api/parse", tags=["parse"])
 
 
 async def _get_template_fields(template_id: int, version: int | None = None):
+    result = await get_full_fields_internal(template_id, version)
+    return result["fields"], result["template_version"]
+
+
+async def _save_parse_cache(
+    sample_id: int,
+    template_id: int,
+    template_version: int,
+    parse_result: ParseResult
+):
     db = await get_db()
     try:
-        if version is not None:
-            t_rows = await db.execute_fetchall(
-                "SELECT * FROM template_versions WHERE template_id = ? AND version = ?",
-                (template_id, version),
-            )
-            if not t_rows:
-                raise HTTPException(status_code=404, detail="template version not found")
-            actual_version = version
-        else:
-            t_rows = await db.execute_fetchall(
-                "SELECT * FROM templates WHERE id = ?", (template_id,)
-            )
-            if not t_rows:
-                raise HTTPException(status_code=404, detail="template not found")
-            v_rows = await db.execute_fetchall(
-                "SELECT MAX(version) as max_version FROM template_versions WHERE template_id = ?",
-                (template_id,),
-            )
-            actual_version = v_rows[0]["max_version"] or 1
+        parse_result_json = json.dumps(parse_result.model_dump())
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO parse_cache
+            (sample_id, template_id, template_version, parse_result_json, needs_reparse, created_at)
+            VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            """,
+            (sample_id, template_id, template_version, parse_result_json)
+        )
+        await db.commit()
     finally:
         await db.close()
 
-    fields = [FieldDef(**f) for f in json.loads(t_rows[0]["fields_json"])]
-    return fields, actual_version
+
+async def _get_parse_cache(
+    sample_id: int,
+    template_id: int,
+    template_version: int
+) -> ParseResult | None:
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            """
+            SELECT * FROM parse_cache
+            WHERE sample_id = ? AND template_id = ? AND template_version = ? AND needs_reparse = 0
+            ORDER BY id DESC LIMIT 1
+            """,
+            (sample_id, template_id, template_version)
+        )
+        if not rows:
+            return None
+        return ParseResult(**json.loads(rows[0]["parse_result_json"]))
+    finally:
+        await db.close()
 
 
 async def _get_sample_data(sample_id: int):
@@ -68,10 +88,21 @@ async def parse_single(
     template_id: int,
     sample_id: int,
     version: int | None = Query(default=None, ge=1, description="Template version number, uses latest if not specified"),
+    use_cache: bool = Query(default=True, description="Whether to use cached parse results"),
 ):
     fields, actual_version = await _get_template_fields(template_id, version)
+
+    if use_cache:
+        cached_result = await _get_parse_cache(sample_id, template_id, actual_version)
+        if cached_result is not None:
+            return cached_result
+
     raw = await _get_sample_data(sample_id)
-    return parse_message(raw, fields, template_id, sample_id, actual_version)
+    result = parse_message(raw, fields, template_id, sample_id, actual_version)
+
+    await _save_parse_cache(sample_id, template_id, actual_version, result)
+
+    return result
 
 
 def _compare_results(
@@ -200,6 +231,8 @@ async def batch_validate(body: BatchValidateRequest):
 
         result = parse_message(raw, fields, body.template_id, sid, actual_version)
         results.append(result)
+
+        await _save_parse_cache(sid, body.template_id, actual_version, result)
 
         for pf in result.fields:
             if pf.status == "parse_error":
